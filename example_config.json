@@ -1,0 +1,15 @@
+{
+  "name": "weather-api",
+  "display_name": "Weather API",
+  "description": "A comprehensive API for retrieving current weather and forecasts",
+  "icon": "https://example.com/weather-api.svg",
+  "version": "1.0.3",
+  "documentation_url": "https://weather-api.example.com/docs",
+  "openapi_spec_url": "https://weather-api.example.com/openapi.json",
+  "authentication": {
+    "type": "apiKey",
+    "in": "header",
+    "name": "X-API-Key",
+    "value": ""
+  }
+} 

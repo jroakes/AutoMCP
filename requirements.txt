@@ -1,0 +1,11 @@
+google-adk
+crawl4ai
+fastapi
+uvicorn
+pydantic
+fastmcp
+requests
+PyYAML
+chromadb
+fastmcp
+
