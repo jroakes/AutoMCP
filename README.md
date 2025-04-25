@@ -1,5 +1,7 @@
 # AutoMCP: Build MCP servers from OpenAPI specs
 
+> **⚠️ ALPHA WARNING:** AutoMCP is in active development and *not* production-ready. The codebase is changing rapidly and may fail unpredictably. Proceed with caution!
+
 AutoMCP is a tool for automatically generating [Model Context Protocol (MCP)](https://github.com/modelcontextprotocol/mcp) tools, resources, and prompts from OpenAPI specifications.
 
 ## Features

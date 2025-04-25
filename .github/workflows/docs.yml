@@ -9,6 +9,7 @@ on:
       - 'mkdocs.yml'
       - 'src/**'
       - '.github/workflows/docs.yml'
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -25,4 +26,6 @@ jobs:
           git config --local user.email "action@github.com"
           git config --local user.name "GitHub Action"
       - name: Deploy documentation
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: mkdocs gh-deploy --force 

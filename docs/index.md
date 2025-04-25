@@ -58,4 +58,6 @@ See the [Installation](getting-started/installation.md) and [Getting Started](ge
           ┌───────────────▼─────────────────┐
           │              LLM                │
           └─────────────────────────────────┘
-``` 
+```
+
+v0.1.2
