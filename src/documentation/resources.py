@@ -1,4 +1,7 @@
-"""Resource management for documentation content and search capabilities."""
+"""
+Name: Documentation resources.
+Description: Implements ResourceManager for managing documentation chunks with vector search capabilities using OpenAI embeddings. Provides functionality for storing, retrieving, and semantically searching API documentation content.
+"""
 
 import logging
 import os
@@ -7,6 +10,7 @@ from typing import Dict, List, Optional, Any
 
 from urllib.parse import urlparse, urlunparse
 
+import numpy as np
 import chromadb
 from chromadb.utils import embedding_functions
 from pydantic import BaseModel, Field
@@ -44,6 +48,7 @@ class ResourceManager:
         openai_api_key: Optional[str] = None,
         huggingface_api_key: Optional[str] = None,
         embedding_model: Optional[str] = None,
+        server_name: str = "default",
     ):
         """Initialize the resource manager.
 
@@ -53,8 +58,10 @@ class ResourceManager:
             openai_api_key: API key for OpenAI (if using OpenAI embeddings)
             huggingface_api_key: API key for HuggingFace (if using HuggingFace embeddings)
             embedding_model: Model name to use for embeddings
+            server_name: Name of the server for collection namespacing
         """
         self.db_directory = db_directory
+        self.server_name = server_name
         Path(db_directory).mkdir(parents=True, exist_ok=True)
 
         # Set up ChromaDB client
@@ -83,17 +90,15 @@ class ResourceManager:
         else:
             raise ValueError(f"Unsupported embedding type: {embedding_type}")
 
-        # Create collections for documents and chunks
+        # Create collections for documents and chunks with server namespacing
         self.docs_collection = self.client.get_or_create_collection(
-            name="documentation_pages", embedding_function=self.embedding_function
+            name=f"{server_name}_docs",
+            # default embedding function will be used
         )
 
         self.chunks_collection = self.client.get_or_create_collection(
-            name="documentation_chunks", embedding_function=self.embedding_function
+            name=f"{server_name}_chunks", embedding_function=self.embedding_function
         )
-
-        # In-memory cache for resource metadata
-        self.resources: Dict[str, DocumentationResource] = {}
 
     @staticmethod
     def normalize_url(url: str) -> str:
@@ -126,10 +131,7 @@ class ResourceManager:
         # Normalize the URL to use as a canonical ID
         normalized_url = self.normalize_url(resource.url)
 
-        # Store the resource in memory
-        self.resources[normalized_url] = resource
-
-        # Add to ChromaDB for vector search
+        # Add to ChromaDB without embeddings
         try:
             self.docs_collection.upsert(
                 ids=[normalized_url],
@@ -141,10 +143,13 @@ class ResourceManager:
                         **resource.metadata,
                     }
                 ],
+                embeddings=np.zeros(384),  # fill with zeroes
             )
-            logger.info(f"Added resource to vector DB: {normalized_url}")
+            logger.debug(f"Added resource to document collection: {normalized_url}")
         except Exception as e:
-            logger.error(f"Error adding resource to vector DB: {e}")
+            logger.error(
+                f"Error adding resource to document collection: {e} in upsert."
+            )
 
     def add_chunks(self, chunks: List[DocumentationChunk]) -> None:
         """Add documentation chunks to the vector database.
@@ -162,7 +167,7 @@ class ResourceManager:
                     for chunk in chunks
                 ],
             )
-            logger.info(f"Added {len(chunks)} chunks to vector DB")
+            logger.debug(f"Added {len(chunks)} chunks to vector DB")
         except Exception as e:
             logger.error(f"Error adding chunks to vector DB: {e}")
 
@@ -176,22 +181,63 @@ class ResourceManager:
             The documentation resource, or None if not found
         """
         normalized_url = self.normalize_url(url)
-        return self.resources.get(normalized_url)
+
+        try:
+            result = self.docs_collection.get(ids=[normalized_url])
+            if result and result["documents"] and len(result["documents"]) > 0:
+                metadata = result["metadatas"][0] if result["metadatas"] else {}
+                return DocumentationResource(
+                    id=normalized_url,
+                    url=normalized_url,
+                    title=metadata.get("title", ""),
+                    content=result["documents"][0],
+                    metadata={
+                        k: v for k, v in metadata.items() if k not in ["url", "title"]
+                    },
+                )
+        except Exception as e:
+            logger.error(f"Error retrieving resource: {e}")
+
+        return None
 
     def list_resources(self) -> List[Dict[str, Any]]:
         """List all available documentation resources.
 
         Returns:
-            List of resource metadata
+            List of resource metadata for MCP consumption
         """
-        return [
-            {
-                "uri": url,
-                "name": resource.title,
-                "description": f"Documentation page: {resource.title}",
-            }
-            for url, resource in self.resources.items()
-        ]
+        try:
+            # Get all documents from docs collection
+            results = self.docs_collection.get()
+
+            resources = []
+            for i, doc_id in enumerate(results["ids"]):
+                metadata = results["metadatas"][i] if results["metadatas"] else {}
+                title = metadata.get("title", "Untitled")
+
+                # Format as MCP resource - use proper URI format
+                resources.append(
+                    {
+                        "uri": f"docs://{doc_id}",
+                        "name": title,
+                        "description": f"Documentation page: {title}",
+                    }
+                )
+
+            # Add a special search resource with template URI
+            resources.append(
+                {
+                    "uri": "search://{query}",
+                    "name": "Search Documentation",
+                    "description": "Search across all documentation chunks with a query parameter",
+                }
+            )
+
+            return resources
+
+        except Exception as e:
+            logger.error(f"Error listing resources: {e}")
+            return []
 
     def search_chunks(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:
         """Search for documentation chunks matching a query.
@@ -237,18 +283,60 @@ class ResourceManager:
 
         return formatted_results
 
-    def clear_database(self) -> None:
-        """Clear all data from the vector database."""
-        self.client.reset()
-        self.resources = {}
+    def clear(self) -> None:
+        """Clear all resources from memory and the vector database."""
+        # Clear vector database collections
+        self.docs_collection.delete(where={})
+        self.chunks_collection.delete(where={})
+        logger.debug("Cleared vector database")
 
-        # Recreate collections
-        self.docs_collection = self.client.get_or_create_collection(
-            name="documentation_pages", embedding_function=self.embedding_function
-        )
+    def is_empty(self) -> bool:
+        """Check if the resource manager is empty.
 
-        self.chunks_collection = self.client.get_or_create_collection(
-            name="documentation_chunks", embedding_function=self.embedding_function
-        )
+        Returns:
+            True if the resource manager has no documents, False otherwise
+        """
+        try:
+            # Check if collections exist and have documents
+            collection_names = [c.name for c in self.client.list_collections()]
 
-        logger.info("Cleared vector database")
+            docs_collection_name = f"{self.server_name}_docs"
+            chunks_collection_name = f"{self.server_name}_chunks"
+
+            if (
+                docs_collection_name not in collection_names
+                or chunks_collection_name not in collection_names
+            ):
+                return True
+
+            return (
+                self.docs_collection.count() == 0 or self.chunks_collection.count() == 0
+            )
+        except Exception as e:
+            logger.warning(f"Error checking if collections are empty: {e}")
+            # If there's an error, assume it's empty
+            return True
+
+    def exists(self) -> bool:
+        """Check if the resource manager database exists.
+
+        Returns:
+            True if the database directory exists and collections are created, False otherwise
+        """
+        try:
+            # Check if directory exists
+            if not os.path.exists(self.db_directory):
+                return False
+
+            # Check if collections exist with proper namespace
+            collection_names = [c.name for c in self.client.list_collections()]
+            docs_collection_name = f"{self.server_name}_docs"
+            chunks_collection_name = f"{self.server_name}_chunks"
+
+            return (
+                docs_collection_name in collection_names
+                and chunks_collection_name in collection_names
+            )
+        except Exception as e:
+            logger.warning(f"Error checking if database exists: {e}")
+            return False

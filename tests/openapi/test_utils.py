@@ -1,8 +1,7 @@
 """Unit tests for the OpenAPI utility classes."""
 
 import unittest
-from unittest.mock import patch, MagicMock, call
-import requests
+from unittest.mock import patch
 import time
 
 from src.openapi.utils import RetryHandler, RateLimiter

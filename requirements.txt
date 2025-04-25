@@ -8,4 +8,5 @@ requests
 PyYAML
 chromadb
 fastmcp
-
+colorama
+tenacity

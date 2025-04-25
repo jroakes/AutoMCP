@@ -3,6 +3,7 @@
 Simplified version of Google ADK's auth_helpers focusing on API key authentication.
 """
 
+import base64
 from typing import Dict, Any, Optional, Tuple, Literal
 from enum import Enum
 
@@ -19,12 +20,24 @@ class AuthSchemeType(str, Enum):
     """Types of authentication schemes."""
 
     apiKey = "apiKey"
+    http = "http"
+    oauth2 = "oauth2"
 
 
 class AuthCredentialTypes(str, Enum):
     """Types of authentication credentials."""
 
     API_KEY = "API_KEY"
+    BEARER = "BEARER"
+    BASIC = "BASIC"
+    OAUTH2 = "OAUTH2"
+
+
+class HttpScheme(str, Enum):
+    """HTTP authentication schemes."""
+
+    bearer = "bearer"
+    basic = "basic"
 
 
 class AuthScheme(BaseModel):
@@ -34,6 +47,7 @@ class AuthScheme(BaseModel):
     description: Optional[str] = None
     name: Optional[str] = None
     in_: Optional[APIKeyIn] = None
+    http_scheme: Optional[HttpScheme] = None
 
     @classmethod
     def from_api_key(cls, api_key: APIKey) -> "AuthScheme":
@@ -45,32 +59,85 @@ class AuthScheme(BaseModel):
             in_=api_key.in_,
         )
 
+    @classmethod
+    def from_http(
+        cls, scheme: HttpScheme, description: Optional[str] = None
+    ) -> "AuthScheme":
+        """Create an AuthScheme for HTTP authentication."""
+        return cls(
+            type_=AuthSchemeType.http,
+            description=description or f"HTTP {scheme} authentication",
+            http_scheme=scheme,
+        )
+
+    @classmethod
+    def from_oauth2(cls, description: Optional[str] = None) -> "AuthScheme":
+        """Create an AuthScheme for OAuth2 authentication."""
+        return cls(
+            type_=AuthSchemeType.oauth2,
+            description=description or "OAuth2 authentication",
+            http_scheme=HttpScheme.bearer,  # OAuth2 uses bearer tokens
+        )
+
 
 class AuthCredential(BaseModel):
     """Authentication credential.
 
     Args:
         auth_type: Type of authentication
-        api_key: API key value
+        api_key: API key value for API_KEY auth
+        token: Token value for BEARER or OAUTH2 auth
+        username: Username for BASIC auth
+        password: Password for BASIC auth
     """
 
     auth_type: AuthCredentialTypes
     api_key: Optional[str] = None
+    token: Optional[str] = None
+    username: Optional[str] = None
+    password: Optional[str] = None
+
+    @property
+    def basic_auth_value(self) -> Optional[str]:
+        """Get the Basic auth value as 'username:password' for HTTP Basic auth."""
+        if (
+            self.auth_type == AuthCredentialTypes.BASIC
+            and self.username
+            and self.password
+        ):
+            return f"{self.username}:{self.password}"
+        if self.auth_type == AuthCredentialTypes.BASIC and self.token:
+            return self.token
+        return None
+
+    @property
+    def bearer_token(self) -> Optional[str]:
+        """Get the bearer token for HTTP Bearer or OAuth2 auth."""
+        if (
+            self.auth_type in (AuthCredentialTypes.BEARER, AuthCredentialTypes.OAUTH2)
+            and self.token
+        ):
+            return self.token
+        return None
 
 
 def token_to_scheme_credential(
-    token_type: Literal["apikey"],
+    token_type: Literal["apikey", "bearer", "basic", "oauth2"],
     location: Optional[Literal["header", "query"]] = None,
     name: Optional[str] = None,
     credential_value: Optional[str] = None,
+    username: Optional[str] = None,
+    password: Optional[str] = None,
 ) -> Tuple[AuthScheme, Optional[AuthCredential]]:
-    """Creates AuthScheme and AuthCredential for API key.
+    """Creates AuthScheme and AuthCredential for various authentication types.
 
     Args:
-        token_type: Must be "apikey"
-        location: "header" or "query"
-        name: Name of the header or query parameter
-        credential_value: Value of the API key
+        token_type: "apikey", "bearer", "basic", or "oauth2"
+        location: "header" or "query" (for apikey only)
+        name: Name of the header or query parameter (for apikey only)
+        credential_value: Value of the API key, token, or combined "username:password"
+        username: Username for basic auth (alternative to credential_value)
+        password: Password for basic auth (alternative to credential_value)
 
     Returns:
         Tuple: (AuthScheme, AuthCredential)
@@ -78,26 +145,67 @@ def token_to_scheme_credential(
     Raises:
         ValueError: For invalid type or location
     """
-    if token_type != "apikey":
+    if token_type == "apikey":
+        if not location:
+            raise ValueError("Location is required for apiKey")
+
+        in_: APIKeyIn
+        if location == "header":
+            in_ = APIKeyIn.header
+        elif location == "query":
+            in_ = APIKeyIn.query
+        else:
+            raise ValueError(f"Invalid location for apiKey: {location}")
+
+        # FastAPI's APIKey model expects the field name "in" not "in_". Provide it via kwargs.
+        api_key = APIKey(type="apiKey", **{"in": in_}, name=name)
+        auth_scheme = AuthScheme.from_api_key(api_key)
+
+        if credential_value:
+            auth_credential = AuthCredential(
+                auth_type=AuthCredentialTypes.API_KEY, api_key=credential_value
+            )
+        else:
+            auth_credential = None
+
+    elif token_type == "bearer":
+        auth_scheme = AuthScheme.from_http(HttpScheme.bearer)
+        if credential_value:
+            auth_credential = AuthCredential(
+                auth_type=AuthCredentialTypes.BEARER, token=credential_value
+            )
+        else:
+            auth_credential = None
+
+    elif token_type == "basic":
+        auth_scheme = AuthScheme.from_http(HttpScheme.basic)
+
+        # Handle username/password pair or pre-formatted value
+        if username and password:
+            auth_credential = AuthCredential(
+                auth_type=AuthCredentialTypes.BASIC,
+                username=username,
+                password=password,
+            )
+        elif credential_value:
+            # Assume credential_value is either "username:password" or already encoded
+            auth_credential = AuthCredential(
+                auth_type=AuthCredentialTypes.BASIC, token=credential_value
+            )
+        else:
+            auth_credential = None
+
+    elif token_type == "oauth2":
+        auth_scheme = AuthScheme.from_oauth2()
+        if credential_value:
+            auth_credential = AuthCredential(
+                auth_type=AuthCredentialTypes.OAUTH2, token=credential_value
+            )
+        else:
+            auth_credential = None
+
+    else:
         raise ValueError(f"Invalid security scheme type: {token_type}")
-
-    in_: APIKeyIn
-    if location == "header":
-        in_ = APIKeyIn.header
-    elif location == "query":
-        in_ = APIKeyIn.query
-    else:
-        raise ValueError(f"Invalid location for apiKey: {location}")
-
-    api_key = APIKey(type="apiKey", in_=in_, name=name)
-    auth_scheme = AuthScheme.from_api_key(api_key)
-
-    if credential_value:
-        auth_credential = AuthCredential(
-            auth_type=AuthCredentialTypes.API_KEY, api_key=credential_value
-        )
-    else:
-        auth_credential = None
 
     return auth_scheme, auth_credential
 
@@ -109,16 +217,22 @@ def credential_to_param(
     """Converts AuthCredential and AuthScheme to a Parameter and a dictionary for additional kwargs.
 
     Args:
-        auth_scheme: The AuthScheme object (APIKey)
+        auth_scheme: The AuthScheme object
         auth_credential: The AuthCredential object
 
     Returns:
         Tuple: (ApiParameter, Dict[str, Any])
     """
-    if not auth_credential or not auth_credential.api_key:
+    if not auth_credential:
         return None, None
 
-    if auth_scheme.type_ == AuthSchemeType.apiKey:
+    if (
+        auth_scheme.type_ == AuthSchemeType.apiKey
+        and auth_credential.auth_type == AuthCredentialTypes.API_KEY
+    ):
+        if not auth_credential.api_key:
+            return None, None
+
         param_name = auth_scheme.name or ""
         python_name = INTERNAL_AUTH_PREFIX + param_name
 
@@ -132,11 +246,64 @@ def credential_to_param(
         param = ApiParameter(
             name=param_name,
             location=param_location,
-            schema={"type": "string"},
+            schema_definition={"type": "string"},
             description=auth_scheme.description or "",
         )
 
         kwargs = {python_name: auth_credential.api_key}
         return param, kwargs
-    else:
-        raise ValueError("Invalid security scheme and credential combination")
+
+    elif auth_scheme.type_ == AuthSchemeType.http:
+        # HTTP auth always goes in the Authorization header
+        param = ApiParameter(
+            name="Authorization",
+            location="header",
+            schema_definition={"type": "string"},
+            description=auth_scheme.description or "",
+        )
+
+        if (
+            auth_scheme.http_scheme == HttpScheme.bearer
+            and auth_credential.bearer_token
+        ):
+            # Bearer authentication
+            kwargs = {
+                INTERNAL_AUTH_PREFIX
+                + "Authorization": f"Bearer {auth_credential.bearer_token}"
+            }
+            return param, kwargs
+
+        elif (
+            auth_scheme.http_scheme == HttpScheme.basic
+            and auth_credential.basic_auth_value
+        ):
+            # Basic authentication
+            basic_auth = auth_credential.basic_auth_value
+            # Encode as base64 if not already encoded
+            if ":" in basic_auth:  # username:password format
+                encoded_auth = base64.b64encode(basic_auth.encode()).decode()
+                kwargs = {
+                    INTERNAL_AUTH_PREFIX + "Authorization": f"Basic {encoded_auth}"
+                }
+                return param, kwargs
+            else:
+                # Assuming already formatted correctly
+                kwargs = {INTERNAL_AUTH_PREFIX + "Authorization": f"Basic {basic_auth}"}
+                return param, kwargs
+
+    elif auth_scheme.type_ == AuthSchemeType.oauth2 and auth_credential.bearer_token:
+        # OAuth2 uses Bearer token in Authorization header
+        param = ApiParameter(
+            name="Authorization",
+            location="header",
+            schema_definition={"type": "string"},
+            description=auth_scheme.description or "",
+        )
+
+        kwargs = {
+            INTERNAL_AUTH_PREFIX
+            + "Authorization": f"Bearer {auth_credential.bearer_token}"
+        }
+        return param, kwargs
+
+    return None, None

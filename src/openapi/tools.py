@@ -1,12 +1,13 @@
-"""Tools for interacting with OpenAPI-defined APIs."""
+"""
+Name: OpenAPI tools.
+Description: Implements RestApiTool and OpenAPIToolkit classes for creating LLM-compatible tools from OpenAPI specifications. Provides comprehensive support for authentication, rate limiting, retry logic, and pagination when making API requests.
+"""
 
-import json
 import logging
 import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import requests
-from fastapi.openapi.models import APIKey, APIKeyIn
 
 from .spec import OpenAPISpecParser
 from .auth import auth_helpers
@@ -66,16 +67,55 @@ class RestApiTool:
         self.pagination_handler = PaginationHandler(self.pagination_config)
 
         # Setup auth scheme and credential using auth_helpers if auth_config is provided
-        if auth_config and auth_config.type == "apiKey":
+        if auth_config:
             try:
-                self.auth_scheme, self.auth_credential = (
-                    auth_helpers.token_to_scheme_credential(
-                        token_type="apikey",
-                        location=auth_config.in_field,
-                        name=auth_config.name,
-                        credential_value=auth_config.value,
+                if auth_config.type == "apiKey":
+                    self.auth_scheme, self.auth_credential = (
+                        auth_helpers.token_to_scheme_credential(
+                            token_type="apikey",
+                            location=auth_config.in_field,
+                            name=auth_config.name,
+                            credential_value=auth_config.value,
+                        )
                     )
-                )
+                elif auth_config.type == "http":
+                    # Handle HTTP auth (Basic or Bearer)
+                    if auth_config.scheme == "basic":
+                        # Handle basic auth with username and password
+                        if hasattr(auth_config, "username") and hasattr(
+                            auth_config, "password"
+                        ):
+                            self.auth_scheme, self.auth_credential = (
+                                auth_helpers.token_to_scheme_credential(
+                                    token_type="basic",
+                                    username=auth_config.username,
+                                    password=auth_config.password,
+                                )
+                            )
+                        # Or with pre-formatted credential
+                        elif hasattr(auth_config, "value"):
+                            self.auth_scheme, self.auth_credential = (
+                                auth_helpers.token_to_scheme_credential(
+                                    token_type="basic",
+                                    credential_value=auth_config.value,
+                                )
+                            )
+                    elif auth_config.scheme == "bearer":
+                        # Handle bearer token auth
+                        self.auth_scheme, self.auth_credential = (
+                            auth_helpers.token_to_scheme_credential(
+                                token_type="bearer",
+                                credential_value=auth_config.value,
+                            )
+                        )
+                elif auth_config.type == "oauth2":
+                    # Handle OAuth2 auth
+                    self.auth_scheme, self.auth_credential = (
+                        auth_helpers.token_to_scheme_credential(
+                            token_type="oauth2",
+                            credential_value=auth_config.value,
+                        )
+                    )
             except ValueError as e:
                 logger.error(f"Error setting up auth: {e}")
 
@@ -90,7 +130,7 @@ class RestApiTool:
         required = []
 
         for param in self.endpoint.parameters:
-            param_schema = param.schema.copy()
+            param_schema = param.schema_definition.copy()
             properties[param.name] = {
                 "type": param_schema.get("type", "string"),
                 "description": param.description,
@@ -128,7 +168,7 @@ class RestApiTool:
 
         return schema
 
-    def execute(self, **kwargs) -> Dict[str, Any]:
+    def execute(self, **kwargs: Any) -> Dict[str, Any]:
         """Execute the API request with retry and rate limiting.
 
         Args:
@@ -357,6 +397,15 @@ class OpenAPIToolkit:
         endpoints = self.spec_parser.get_endpoints()
 
         for name, description, endpoint_spec in endpoints:
+            method = name.split(" ", 1)[0].lower()
+
+            # Only support GET and POST methods as per guidelines
+            if method not in ["get", "post"]:
+                logger.debug(
+                    f"Skipping endpoint {name} as method '{method}' is not supported."
+                )
+                continue
+
             # Extract operation ID to use as a unique tool name
             operation_id = endpoint_spec.get("operationId")
             if not operation_id:
@@ -366,7 +415,6 @@ class OpenAPIToolkit:
 
             # Clean up path parameters
             path = name.split(" ", 1)[1]
-            method = name.split(" ", 1)[0].lower()
 
             # Extract and transform parameters
             parameters = []
@@ -376,7 +424,7 @@ class OpenAPIToolkit:
                     description=param_spec.get("description", ""),
                     required=param_spec.get("required", False),
                     location=param_spec["in"],
-                    schema=param_spec.get("schema", {}),
+                    schema_definition=param_spec.get("schema", {}),
                 )
                 parameters.append(param)
 

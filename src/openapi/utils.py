@@ -1,4 +1,7 @@
-"""Utility classes for OpenAPI tools."""
+"""
+Name: OpenAPI utilities.
+Description: Contains utility classes for rate limiting, retry handling, and pagination when making API requests. Implements token bucket algorithm for rate limiting, exponential backoff for retries, and support for various pagination mechanisms.
+"""
 
 import time
 import logging

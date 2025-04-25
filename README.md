@@ -1,4 +1,4 @@
-# AutoMCP
+# AutoMCP: Build MCP servers from OpenAPI specs
 
 AutoMCP is a tool for automatically generating [Model Context Protocol (MCP)](https://github.com/modelcontextprotocol/mcp) tools, resources, and prompts from OpenAPI specifications.
 
@@ -63,17 +63,11 @@ Create a JSON configuration file with the following structure:
 ### Running the Tool
 
 ```bash
-# Generate MCP configuration and start server
-python -m src.main --config example_config.json
-
-# Generate MCP configuration without starting the server
-python -m src.main --config example_config.json --no-server
-
-# Save MCP configuration to a file
-python -m src.main --config example_config.json --output mcp_config.json --no-server
+# Add API configuration and crawl documentation
+python -m src.main add --config example_config.json
 
 # Start server with custom host and port
-python -m src.main --config example_config.json --host 127.0.0.1 --port 9000
+python -m src.main serve --config example_config.json --host 127.0.0.1 --port 9000
 ```
 
 ## How It Works

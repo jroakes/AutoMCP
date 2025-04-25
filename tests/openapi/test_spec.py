@@ -1,9 +1,7 @@
 """Unit tests for the OpenAPI spec parser."""
 
 import unittest
-from unittest.mock import patch, mock_open
-import json
-import yaml
+
 
 from src.openapi.spec import OpenAPISpecParser, reduce_openapi_spec
 

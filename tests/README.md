@@ -30,7 +30,40 @@ The MCP server uses FastAPI (an async framework), so our tests include special c
 
 ## Running Tests
 
-### Unit Tests with Unittest
+### Preferred Method: Enhanced Test Runner
+
+AutoMCP ships with an enhanced test-runner script that provides colored output,
+better summaries, log-capture, and smart filtering:
+
+```bash
+# Run the complete suite (default verbosity)
+python scripts/tests/run_tests.py
+
+# Verbose output
+python scripts/tests/run_tests.py --verbose
+
+# Quiet mode – only errors
+python scripts/tests/run_tests.py --quiet
+
+# Run only tests matching a pattern
+python scripts/tests/run_tests.py --filter=mcp  # any substring match
+
+# Run a specific test module
+python scripts/tests/run_tests.py --module=test_utils
+
+# Stop on first failure
+python scripts/tests/run_tests.py --failfast
+```
+
+Run `python scripts/tests/run_tests.py --help` to see the full list of
+available options (mirrors the docstring at the top of the script).
+
+### Alternative Methods
+
+If you prefer, you can still execute the tests directly with `unittest` or
+`pytest`.
+
+#### Unit Tests with Unittest
 
 ```bash
 # Run all tests
@@ -49,7 +82,7 @@ python -m unittest tests.mcp.test_server.TestMCPServer.test_init
 python -m unittest discover -s tests/openapi
 ```
 
-### Unit Tests with Pytest
+#### Unit Tests with Pytest
 
 ```bash
 # Install pytest if not already installed

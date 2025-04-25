@@ -1,0 +1,73 @@
+site_name: AutoMCP Documentation
+site_description: Documentation for the AutoMCP OpenAPI toolkit
+repo_url: https://github.com/jroakes/AutoMCP
+repo_name: AutoMCP
+
+theme:
+  name: material
+  palette:
+    primary: indigo
+    accent: indigo
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.expand
+    - navigation.indexes
+    - content.code.annotate
+    - search.highlight
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          rendering:
+            show_source: true
+            show_category_heading: true
+            heading_level: 3
+  - autorefs
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - pymdownx.details
+  - attr_list
+  - md_in_html
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - Quick Start: getting-started/quick_start.md
+    - About MCP: getting-started/about-mcp.md
+  - Configuration:
+    - Authentication: configuration/authentication.md
+    - Rate Limiting: configuration/rate_limiting.md
+    - Retry Handling: configuration/retry.md
+    - Pagination: configuration/pagination.md
+    - MCP Configuration: configuration/mcp.md
+  - Components:
+    - Documentation Crawler: components/documentation_crawler.md
+    - MCP Generator: components/mcp_generator.md
+    - Prompt Generator: components/prompt_generator.md
+    - OpenAPI Processing: components/openapi.md
+  - API Reference:
+    - Overview: api/overview.md
+    - Main CLI: api/main.md
+    - Manager: api/manager.md
+    - Utils: api/utils.md
+    - OpenAPI: api/openapi.md
+    - MCP: api/mcp.md
+    - Documentation: api/documentation.md
+    - Prompt: api/prompt.md
+    - CLI: api/cli.md
+  - Development:
+    - Contributing: development/contributing.md
+    - Testing: development/testing.md

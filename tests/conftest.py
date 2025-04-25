@@ -1,8 +1,8 @@
 """Configuration file for pytest."""
 
-import json
 import os
 import sys
+import tempfile
 import pytest
 from pathlib import Path
 
@@ -104,3 +104,36 @@ def sample_api_config():
             "enabled": True,
         },
     }
+
+
+@pytest.fixture
+def sample_api_config_with_db():
+    """Return a sample API configuration with db_directory for testing."""
+    return {
+        "name": "test-api-db",
+        "display_name": "Test API with DB",
+        "description": "API for testing with custom DB directory",
+        "openapi_spec_url": "https://api.example.com/openapi.json",
+        "documentation_url": "https://api.example.com/docs",
+        "db_directory": "./test_custom_db",
+        "authentication": {
+            "type": "apiKey",
+            "in": "header",
+            "name": "X-API-Key",
+            "value": "test-api-key",
+        },
+    }
+
+
+@pytest.fixture
+def temp_registry_file():
+    """Create a temporary registry file for testing."""
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tmp:
+        tmp.write(b"{}")
+        tmp_path = tmp.name
+
+    yield tmp_path
+
+    # Cleanup after test
+    if os.path.exists(tmp_path):
+        os.unlink(tmp_path)

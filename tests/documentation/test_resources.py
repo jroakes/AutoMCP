@@ -5,6 +5,7 @@ import shutil
 import unittest
 import tempfile
 from unittest.mock import patch, MagicMock
+import numpy as np
 
 from src.documentation.resources import (
     ResourceManager,
@@ -47,7 +48,11 @@ class TestResourceManager(unittest.TestCase):
         mock_client.get_or_create_collection.return_value = mock_collection
 
         # Initialize ResourceManager
-        manager = ResourceManager(db_directory=self.temp_dir, embedding_type="openai")
+        _manager = ResourceManager(
+            db_directory=self.temp_dir,
+            embedding_type="openai",
+            server_name="test_server",
+        )
 
         # Check if the client was correctly initialized
         mock_persistent_client.assert_called_once_with(path=self.temp_dir)
@@ -58,8 +63,17 @@ class TestResourceManager(unittest.TestCase):
             mock_embedding_function.call_args[1]["api_key"], self.mock_openai_key
         )
 
-        # Check if collections were created
+        # Check if collections were created with proper namespacing
         self.assertEqual(mock_client.get_or_create_collection.call_count, 2)
+
+        # Verify first call (docs collection)
+        first_call_args = mock_client.get_or_create_collection.call_args_list[0][1]
+        self.assertEqual(first_call_args["name"], "test_server_docs")
+
+        # Verify second call (chunks collection)
+        second_call_args = mock_client.get_or_create_collection.call_args_list[1][1]
+        self.assertEqual(second_call_args["name"], "test_server_chunks")
+        self.assertIsNotNone(second_call_args["embedding_function"])
 
     def test_normalize_url(self):
         """Test URL normalization."""
@@ -90,7 +104,11 @@ class TestResourceManager(unittest.TestCase):
         mock_client.get_or_create_collection.return_value = mock_collection
 
         # Initialize ResourceManager
-        manager = ResourceManager(db_directory=self.temp_dir, embedding_type="openai")
+        manager = ResourceManager(
+            db_directory=self.temp_dir,
+            embedding_type="openai",
+            server_name="test_server",
+        )
 
         # Create a test resource
         resource = DocumentationResource(
@@ -104,13 +122,12 @@ class TestResourceManager(unittest.TestCase):
         # Add the resource
         manager.add_resource(resource)
 
-        # Check if the resource was added to the collection
+        # Check if the resource was added to the collection with zero embeddings
         mock_collection.upsert.assert_called_once()
-
-        # Verify the resource was stored in memory
-        normalized_url = manager.normalize_url(resource.url)
-        self.assertIn(normalized_url, manager.resources)
-        self.assertEqual(manager.resources[normalized_url], resource)
+        upsert_args = mock_collection.upsert.call_args[1]
+        self.assertEqual(upsert_args["ids"], ["https://example.com/docs"])
+        self.assertEqual(upsert_args["documents"], ["This is a test document."])
+        self.assertTrue(np.array_equal(upsert_args["embeddings"], np.zeros(384)))
 
     @patch("chromadb.PersistentClient")
     @patch("chromadb.utils.embedding_functions.OpenAIEmbeddingFunction")
@@ -167,28 +184,39 @@ class TestResourceManager(unittest.TestCase):
         mock_collection = MagicMock()
         mock_client.get_or_create_collection.return_value = mock_collection
 
+        # Configure the get method to return test data
+        mock_collection.get.return_value = {
+            "ids": ["https://example.com/docs"],
+            "documents": ["This is a test document."],
+            "metadatas": [
+                {
+                    "title": "Test Document",
+                    "author": "Tester",
+                    "url": "https://example.com/docs",
+                }
+            ],
+        }
+
         # Initialize ResourceManager
-        manager = ResourceManager(db_directory=self.temp_dir, embedding_type="openai")
-
-        # Create a test resource
-        resource = DocumentationResource(
-            id="https://example.com/docs",
-            url="https://example.com/docs",
-            title="Test Document",
-            content="This is a test document.",
-            metadata={"author": "Tester"},
+        manager = ResourceManager(
+            db_directory=self.temp_dir,
+            embedding_type="openai",
+            server_name="test_server",
         )
-
-        # Add the resource
-        manager.resources[resource.url] = resource
 
         # Test retrieving the resource
         retrieved = manager.get_resource("https://example.com/docs")
-        self.assertEqual(retrieved, resource)
+        self.assertIsNotNone(retrieved)
+        self.assertEqual(retrieved.id, "https://example.com/docs")
+        self.assertEqual(retrieved.title, "Test Document")
+        self.assertEqual(retrieved.content, "This is a test document.")
 
         # Test retrieving with URL parameters
         retrieved = manager.get_resource("https://example.com/docs?query=test")
-        self.assertEqual(retrieved, resource)
+        self.assertIsNotNone(retrieved)
+
+        # Configure get to return empty for non-existent resource
+        mock_collection.get.return_value = {"ids": [], "documents": [], "metadatas": []}
 
         # Test retrieving non-existent resource
         retrieved = manager.get_resource("https://example.com/nonexistent")
@@ -277,6 +305,162 @@ class TestResourceManager(unittest.TestCase):
 
             # Check that OpenAI embedding function was NOT used
             mock_openai_embedding.assert_not_called()
+
+    @patch("chromadb.PersistentClient")
+    def test_is_empty_with_empty_collections(self, mock_persistent_client):
+        """Test is_empty returns True when collections are empty."""
+        # Setup mocks
+        mock_client = MagicMock()
+        mock_persistent_client.return_value = mock_client
+
+        empty_collection = MagicMock()
+        empty_collection.count.return_value = 0
+
+        # Setup collections with server-specific names
+        test_docs = MagicMock()
+        test_docs.name = "test_server_docs"
+        test_chunks = MagicMock()
+        test_chunks.name = "test_server_chunks"
+        mock_client.list_collections.return_value = [test_docs, test_chunks]
+
+        # Configure get_collection to return empty_collection
+        mock_client.get_or_create_collection.return_value = empty_collection
+
+        # Initialize ResourceManager
+        manager = ResourceManager(
+            db_directory=self.temp_dir,
+            embedding_type="openai",
+            server_name="test_server",
+        )
+
+        # Call method
+        result = manager.is_empty()
+
+        # Verify result
+        self.assertTrue(result)
+
+    @patch("chromadb.PersistentClient")
+    def test_is_empty_with_populated_collections(self, mock_persistent_client):
+        """Test is_empty returns False when collections have documents."""
+        # Setup mocks
+        mock_client = MagicMock()
+        mock_persistent_client.return_value = mock_client
+
+        # Setup collection names with server prefix
+        doc_pages = MagicMock()
+        doc_pages.name = "test_server_docs"
+        doc_chunks = MagicMock()
+        doc_chunks.name = "test_server_chunks"
+        mock_collections = [doc_pages, doc_chunks]
+        mock_client.list_collections.return_value = mock_collections
+
+        # Create mock collections with documents (non-empty)
+        populated_collection = MagicMock()
+        populated_collection.count.return_value = 10
+
+        # Configure get_or_create_collection to return populated collections
+        mock_client.get_or_create_collection.return_value = populated_collection
+
+        # Initialize ResourceManager
+        manager = ResourceManager(
+            db_directory=self.temp_dir,
+            embedding_type="openai",
+            server_name="test_server",
+        )
+
+        # Call method
+        result = manager.is_empty()
+
+        # Verify result
+        self.assertFalse(result)
+
+    @patch("chromadb.PersistentClient")
+    def test_is_empty_with_missing_collections(self, mock_persistent_client):
+        """Test is_empty returns True when collections don't exist."""
+        # Setup mocks
+        mock_client = MagicMock()
+        mock_persistent_client.return_value = mock_client
+
+        other_collection = MagicMock()
+        other_collection.name = "other_collection"
+        mock_client.list_collections.return_value = [other_collection]
+
+        # Initialize ResourceManager
+        manager = ResourceManager(
+            db_directory=self.temp_dir,
+            embedding_type="openai",
+            server_name="test_server",
+        )
+
+        # Call method
+        result = manager.is_empty()
+
+        # Verify result
+        self.assertTrue(result)
+
+    @patch("chromadb.PersistentClient")
+    def test_is_empty_with_exception(self, mock_persistent_client):
+        """Test is_empty handles exceptions gracefully."""
+        # Setup mocks
+        mock_client = MagicMock()
+        mock_persistent_client.return_value = mock_client
+
+        # Setup mock to raise an exception
+        mock_client.list_collections.side_effect = Exception("Test exception")
+
+        # Initialize ResourceManager
+        manager = ResourceManager(
+            db_directory=self.temp_dir,
+            embedding_type="openai",
+            server_name="test_server",
+        )
+
+        # Call method
+        result = manager.is_empty()
+
+        # Verify result
+        self.assertTrue(result)
+
+    @patch("chromadb.PersistentClient")
+    @patch("os.path.exists")
+    def test_exists_method(self, mock_exists, mock_persistent_client):
+        """Test exists method correctly checks if database exists."""
+        # Setup mocks
+        mock_client = MagicMock()
+        mock_persistent_client.return_value = mock_client
+
+        # Mock collections with proper name attributes and server prefix
+        docs_collection = MagicMock()
+        docs_collection.name = "test_server_docs"
+        chunks_collection = MagicMock()
+        chunks_collection.name = "test_server_chunks"
+
+        # Set up list_collections to return collections with correct names
+        mock_client.list_collections.return_value = [docs_collection, chunks_collection]
+
+        # Mock directory exists
+        mock_exists.return_value = True
+
+        # Initialize ResourceManager
+        manager = ResourceManager(
+            db_directory=self.temp_dir,
+            embedding_type="openai",
+            server_name="test_server",
+        )
+
+        # Test when directory and collections exist
+        self.assertTrue(manager.exists())
+
+        # Test when directory doesn't exist
+        mock_exists.return_value = False
+        self.assertFalse(manager.exists())
+
+        # Test when collections don't exist
+        mock_exists.return_value = True
+        other_collection = MagicMock()
+        other_collection.name = "other_collection"
+        mock_client.list_collections.return_value = [other_collection]
+        self.assertFalse(manager.exists())
 
 
 if __name__ == "__main__":

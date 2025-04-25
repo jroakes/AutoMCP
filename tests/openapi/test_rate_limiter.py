@@ -1,6 +1,5 @@
 import unittest
-from unittest.mock import patch, MagicMock
-import time
+from unittest.mock import patch
 
 from src.openapi.utils import RateLimiter
 from src.openapi.models import RateLimitConfig

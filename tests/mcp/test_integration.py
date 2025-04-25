@@ -1,12 +1,9 @@
 """Integration tests for the MCP server module."""
 
-import json
-import threading
 import unittest
-import time
 import sys
-import requests
-from unittest.mock import patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock
+from src.mcp.server import MCPServer, MCPToolsetConfig
 
 
 # Create async-compatible mocks
@@ -27,9 +24,6 @@ sys.modules["fastmcp"] = mock_fastmcp
 sys.modules["fastmcp.server"] = mock_fastmcp.server
 sys.modules["fastmcp.server.server"] = mock_fastmcp.server.server
 sys.modules["mcp.server.lowlevel.helper_types"] = MagicMock()
-
-# Now import the MCP server module
-from src.mcp.server import MCPServer, MCPToolsetConfig
 
 
 @unittest.skip("Integration tests should be run selectively due to server requirements")
@@ -84,8 +78,8 @@ class TestMCPServerIntegration(unittest.TestCase):
         # This is a simplified test that checks the API routes structure
         # without actually running the server, which avoids async issues
 
-        # Define the expected routes
-        expected_routes = [
+        # Define the expected routes - used for documentation purposes only
+        _expected_routes = [
             "/mcp/discover",
             "/mcp/resource/{resource_id}",
             "/mcp/prompt/{prompt_id}",

@@ -1,6 +1,4 @@
 import unittest
-from unittest.mock import patch, MagicMock
-import time
 
 from src.openapi.utils import RetryHandler
 from src.openapi.models import RetryConfig

@@ -1,9 +1,12 @@
-"""Prompt generator for API tools."""
+"""
+Name: Prompt generator.
+Description: Provides PromptGenerator for creating MCP-compatible prompts from API configurations, tools, and resources. Generates standardized prompts for API overviews, tool usage guides, and resource usage guides.
+"""
 
 import logging
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +25,12 @@ class PromptGenerator:
     """Generator for API tool prompts."""
 
     def __init__(
-        self, api_name: str, api_description: str, tools: List[Dict], resources: Dict
+        self,
+        api_name: str,
+        api_description: str,
+        tools: List[Dict],
+        resources: Dict,
+        custom_prompts: Optional[List[Dict[str, str]]] = None,
     ):
         """Initialize the prompt generator.
 
@@ -31,11 +39,13 @@ class PromptGenerator:
             api_description: Description of the API
             tools: List of tools as dictionaries
             resources: Dictionary of resources
+            custom_prompts: Optional list of custom prompts from the config file
         """
         self.api_name = api_name
         self.api_description = api_description
         self.tools = tools
         self.resources = resources
+        self.custom_prompts = custom_prompts or []
 
     def create_api_overview_prompt(self) -> PromptTemplate:
         """Create a prompt template for an overview of the API.
@@ -72,155 +82,162 @@ Let me know what specific information you need from the {self.api_name} API, and
             variables=[],
         )
 
-    def create_tool_usage_prompt(self) -> PromptTemplate:
-        """Create a prompt template for using tools with the API.
+    def create_tool_usage_guide_prompt(self) -> PromptTemplate:
+        """Create a prompt template for tool usage guide.
 
         Returns:
             A prompt template
         """
-        template = f"""# Using {self.api_name} API Tools
+        template = f"""# {self.api_name} Tool Usage Guide
 
-To use the {self.api_name} API, follow these steps:
+**Tool Overview**
+The tools available for {self.api_name} are generated from its OpenAPI specification. Each tool represents an API endpoint and follows a consistent structure:
 
-1. Identify which tool you need to use for your task
-2. Call the tool with the required parameters
-3. Process the response to extract the information you need
+1. **Name**: A descriptive name derived from the endpoint operation ID
+2. **Description**: Explanation of what the tool does, taken from the API documentation
+3. **Parameters**: Required and optional parameters for the tool, with data types and descriptions
 
-Available tools:
-{{tools}}
+**How to Use the Tools**
+1. Identify the appropriate tool for your task based on the description
+2. Provide all required parameters in the correct format
+3. Handle the response according to the expected return type
 
-Example usage:
-```
-# Example calling a tool
-response = await tool_name(param1=value1, param2=value2)
-```
+**Tool List**
+{', '.join([tool["name"] for tool in self.tools])}
 
-Let me know which tool you want to use, and I'll help you with the specific parameters required.
+**Authentication**
+Most API calls require authentication. Check the authentication guide for how to obtain and use API credentials.
+
+**Error Handling**
+When tools return errors, check for:
+- Missing required parameters
+- Invalid parameter formats
+- Authentication issues
+- Rate limit restrictions
+- Server errors (may require retries)
+
+For detailed information about a specific tool, use its name to get parameter requirements and examples.
 """
 
         return PromptTemplate(
-            id="tool_usage",
-            name=f"{self.api_name} Tool Usage Guide",
-            description=f"Guide for using tools with the {self.api_name} API.",
-            template=template,
-            variables=["tools"],
-        )
-
-    def create_search_query_prompt(self) -> PromptTemplate:
-        """Create a prompt template for formulating search queries.
-
-        Returns:
-            A prompt template
-        """
-        template = f"""# {self.api_name} Search Query Guide
-
-To search for information using the {self.api_name} API, you can use the following pattern:
-
-1. What information are you looking for? (e.g., users, products, articles)
-2. What specific attributes or filters do you need? (e.g., by ID, by name, by date)
-3. How should the results be sorted or limited? (e.g., limit to 10, sort by date)
-
-Example search query:
-```
-{{example_query}}
-```
-
-Formulate your search query clearly specifying what you're looking for and any filters or constraints.
-"""
-
-        return PromptTemplate(
-            id="search_query",
-            name=f"{self.api_name} Search Query Guide",
-            description=f"Guide for formulating search queries with the {self.api_name} API.",
-            template=template,
-            variables=["example_query"],
-        )
-
-    def create_error_handling_prompt(self) -> PromptTemplate:
-        """Create a prompt template for handling errors.
-
-        Returns:
-            A prompt template
-        """
-        template = f"""# {self.api_name} Error Handling Guide
-
-When using the {self.api_name} API, you may encounter various errors. Here's how to handle common issues:
-
-1. Authentication errors: Check that your API credentials are correct and properly configured
-2. Parameter errors: Ensure all required parameters are provided and in the correct format
-3. Rate limiting errors: The API may have limits on how many requests you can make in a time period
-4. Resource not found: The requested resource may not exist or you may not have permission to access it
-
-Common error codes:
-- 400: Bad Request - Check your request parameters
-- 401: Unauthorized - Authentication issue
-- 403: Forbidden - Permission issue
-- 404: Not Found - Resource doesn't exist
-- 429: Too Many Requests - Rate limited
-
-If you encounter an error, please provide the error message and status code for troubleshooting.
-"""
-
-        return PromptTemplate(
-            id="error_handling",
-            name=f"{self.api_name} Error Handling Guide",
-            description=f"Guide for handling errors with the {self.api_name} API.",
+            id="tool_usage_guide",
+            name="Tool Usage Guide",
+            description="Guide to understanding and using the tools generated from OpenAPI specs",
             template=template,
             variables=[],
         )
 
-    def create_authentication_prompt(self) -> PromptTemplate:
-        """Create a prompt template for authentication.
+    def create_resource_usage_guide_prompt(self) -> PromptTemplate:
+        """Create a prompt template for resource usage guide.
 
         Returns:
             A prompt template
         """
-        template = f"""# {self.api_name} Authentication Guide
+        resource_count = len(self.resources) if self.resources else 0
 
-To authenticate with the {self.api_name} API, you need to:
+        template = f"""# {self.api_name} Resource Usage Guide
 
-1. Obtain API credentials ({{auth_type}})
-2. Include these credentials with each request
+**Understanding API Resources**
+Resources are searchable chunks of documentation from the {self.api_name} API documentation. These resources provide context and examples for using the API effectively.
 
-Example authentication:
-```
-{{auth_example}}
-```
+**How Resources are Created**
+1. API documentation pages are crawled from {self.api_name}'s documentation site
+2. Content is extracted, cleaned, and split into semantic chunks
+3. Chunks are embedded and stored in a vector database for semantic search
 
-Make sure to keep your API credentials secure and never expose them in client-side code.
+**Current Resource Database**
+- Total resources: {resource_count}
+- Source: API documentation crawled from official sites
+- Embedding model: OpenAI text-embedding model
+
+**How to Use Resources**
+1. Search for relevant documentation using natural language queries
+2. Reference specific documentation sections when formulating API requests
+3. Use examples from documentation to understand parameter formats and expected responses
+
+**Searching Resources**
+When you need information about the API, you can search the documentation resources using the search_documentation tool. This performs a semantic search and returns the most relevant chunks.
+
+Example search: "How to authenticate with {self.api_name}?"
 """
 
         return PromptTemplate(
-            id="authentication",
-            name=f"{self.api_name} Authentication Guide",
-            description=f"Guide for authenticating with the {self.api_name} API.",
+            id="resource_usage_guide",
+            name="Resource Usage Guide",
+            description="Guide to understanding and using the resources created from crawled API documentation",
             template=template,
-            variables=["auth_type", "auth_example"],
+            variables=[],
+        )
+
+    def create_custom_prompt(
+        self, prompt_data: Dict[str, str], index: int
+    ) -> PromptTemplate:
+        """Create a prompt template from custom prompt data.
+
+        Args:
+            prompt_data: Dictionary containing prompt data
+            index: Index of the prompt for ID generation
+
+        Returns:
+            A prompt template
+        """
+        prompt_name = prompt_data.get("name", f"Custom Prompt {index}")
+        prompt_id = prompt_name.lower().replace(" ", "_")
+
+        return PromptTemplate(
+            id=prompt_id,
+            name=prompt_name,
+            description=prompt_data.get("description", ""),
+            template=prompt_data.get("content", ""),
+            variables=[],
         )
 
     def to_mcp_prompts(self) -> Dict:
         """Convert prompt templates to MCP prompts format.
 
         Returns:
-            Dictionary of MCP prompts
+            Dictionary of MCP prompts compatible with FastMCP
         """
-        # Create all prompt templates
+        try:
+            from fastmcp.prompts.base import UserMessage, AssistantMessage
+        except ImportError:
+            # Use our mock classes during testing
+            from tests.fixtures.fastmcp_mock import UserMessage, AssistantMessage
+
+        # Create the standard prompts
         prompts = [
             self.create_api_overview_prompt(),
-            self.create_tool_usage_prompt(),
-            self.create_search_query_prompt(),
-            self.create_error_handling_prompt(),
-            self.create_authentication_prompt(),
+            self.create_tool_usage_guide_prompt(),
+            self.create_resource_usage_guide_prompt(),
         ]
 
-        # Convert to MCP format
+        # Add custom prompts from the config file
+        for i, prompt_data in enumerate(self.custom_prompts):
+            prompts.append(self.create_custom_prompt(prompt_data, i))
+
+        # Convert to MCP format compatible with FastMCP
         mcp_prompts = {}
         for prompt in prompts:
-            mcp_prompts[prompt.id] = {
-                "name": prompt.name,
-                "description": prompt.description,
-                "template": prompt.template,
-                "variables": prompt.variables,
-            }
+            prompt_id = prompt.id
+
+            # For tool usage prompts, format as messages for better LLM interaction
+            if prompt_id == "tool_usage_guide":
+                mcp_prompts[prompt_id] = [
+                    UserMessage("How should I use the tools in this API?"),
+                    AssistantMessage(prompt.template),
+                ]
+            elif prompt_id == "resource_usage_guide":
+                mcp_prompts[prompt_id] = [
+                    UserMessage("How can I use the documentation resources?"),
+                    AssistantMessage(prompt.template),
+                ]
+            else:
+                # For other prompts, use the structure expected by FastMCP
+                mcp_prompts[prompt_id] = {
+                    "name": prompt.name,
+                    "description": prompt.description,
+                    "template": prompt.template,
+                    "variables": prompt.variables,
+                }
 
         return mcp_prompts

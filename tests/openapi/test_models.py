@@ -1,7 +1,6 @@
 """Unit tests for the OpenAPI models module."""
 
 import unittest
-from pydantic import ValidationError
 
 from src.openapi.models import (
     ApiParameter,
@@ -22,7 +21,7 @@ class TestApiParameter(unittest.TestCase):
         self.assertEqual(param.location, "query")
         self.assertEqual(param.description, "")
         self.assertFalse(param.required)
-        self.assertEqual(param.schema, {})
+        self.assertEqual(param.schema_definition, {})
 
     def test_init_full(self):
         """Test initialization with all fields."""
@@ -31,14 +30,14 @@ class TestApiParameter(unittest.TestCase):
             description="Test parameter",
             required=True,
             location="path",
-            schema={"type": "string", "enum": ["value1", "value2"]},
+            schema_definition={"type": "string", "enum": ["value1", "value2"]},
         )
         self.assertEqual(param.name, "test_param")
         self.assertEqual(param.description, "Test parameter")
         self.assertTrue(param.required)
         self.assertEqual(param.location, "path")
-        self.assertEqual(param.schema["type"], "string")
-        self.assertEqual(param.schema["enum"], ["value1", "value2"])
+        self.assertEqual(param.schema_definition["type"], "string")
+        self.assertEqual(param.schema_definition["enum"], ["value1", "value2"])
 
 
 class TestApiEndpoint(unittest.TestCase):

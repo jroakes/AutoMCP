@@ -117,9 +117,20 @@ cython_debug/
 # Mac System Files
 .DS_Store
 
+# Ruff
+.ruff_cache/
+
+#Chroma
+.chroma/
+.chromadb/
+
+
 # Project Files
 automcp/
 working/
 examples/
+.automcp/
+config_files/
 .cursorrules
 .cursorignore
+.ipynb

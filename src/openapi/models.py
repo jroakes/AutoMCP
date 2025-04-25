@@ -1,4 +1,7 @@
-"""Common models for OpenAPI tools."""
+"""
+Name: OpenAPI models.
+Description: Defines data models for API parameters, endpoints, authentication, rate limiting, retries, and pagination used throughout the system. These models provide structured representations of OpenAPI components for validation and consistency.
+"""
 
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
@@ -11,7 +14,7 @@ class ApiParameter(BaseModel):
     description: str = ""
     required: bool = False
     location: str  # path, query, header, cookie, body
-    schema: Dict[str, Any] = {}
+    schema_definition: Dict[str, Any] = Field(default={})
 
 
 class ApiEndpoint(BaseModel):
@@ -117,3 +120,14 @@ class ApiAuthConfig(BaseModel):
     name: Optional[str] = None
     scheme: Optional[str] = None  # bearer, basic
     value: Optional[str] = None  # actual credential
+
+    # Additional fields for HTTP Basic auth
+    username: Optional[str] = None
+    password: Optional[str] = None
+
+    # Additional fields for OAuth2
+    client_id: Optional[str] = None
+    client_secret: Optional[str] = None
+    token_url: Optional[str] = None
+    scope: Optional[str] = None
+    auto_refresh: bool = False  # Whether to automatically refresh tokens
