@@ -140,3 +140,4 @@ config_files/
 .cursorrules
 .cursorignore
 .ipynb
+.aider*
