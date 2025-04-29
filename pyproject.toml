@@ -1,5 +1,8 @@
 [project]
 name = "automcp"
+description = "Build MCP servers from OpenAPI specs"
+readme = "README.md"
+license-files = ["LICENSE.md"]
 dynamic = ["version"]
 requires-python = ">=3.10"
 authors = [
@@ -30,8 +33,9 @@ dev = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/jroakes/AutoMCP"
-"Bug Tracker" = "https://github.com/jroakes/AutoMCP/issues"
+"Repository" = "https://github.com/jroakes/AutoMCP"
+"Documentation" = "https://automcp.me/"
+"Issues" = "https://github.com/jroakes/AutoMCP/issues"
 
 [project.scripts]
 automcp = "automcp:cli_main"
