@@ -29,15 +29,15 @@ dev = [
 "Bug Tracker" = "https://github.com/jroakes/AutoMCP/issues"
 
 [project.scripts]
-automcp = "src.main:main"
+automcp = "automcp:cli_main"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.version]
-path = "src/__init__.py"
+path = "src/automcp/__init__.py"
 pattern = "__version__ = \"(?P<version>.+)\""
 
 [tool.hatch.build.targets.wheel]
-packages = ["src"]
+packages = ["src/automcp"]
