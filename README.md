@@ -23,7 +23,7 @@ git clone https://github.com/jroakes/automcp.git
 cd automcp
 
 # Install dependencies
-pip install -r requirements.txt
+pip install .
 ```
 
 ## Usage
