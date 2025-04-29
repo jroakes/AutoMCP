@@ -37,11 +37,6 @@ build-backend = "hatchling.build"
 
 [tool.hatch.version]
 path = "src/automcp/__init__.py"
-pattern = "__version__ = \"(?P<version>.+)\""
 
 [tool.hatch.build]
 packages = ["src/automcp"]
-only-packages = true
-
-[tool.hatch.build.sources]
-"src" = ""
