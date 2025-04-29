@@ -77,6 +77,9 @@ Pipfile.lock
 # poetry
 poetry.lock
 
+# uv
+uv.lock
+
 # PEP 582; used by e.g. github.com/David-OConnor/pyflow
 __pypackages__/
 
@@ -123,6 +126,9 @@ cython_debug/
 #Chroma
 .chroma/
 .chromadb/
+
+# JetBrains IDEs
+.idea
 
 
 # Project Files
