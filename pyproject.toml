@@ -1,0 +1,43 @@
+[project]
+name = "automcp"
+dynamic = ["version"]
+requires-python = ">=3.10"
+authors = [
+    {name = "JR Oakes", email = "jr.oakes@gmail.com"}
+]
+dependencies = [
+    "chromadb>=1.0.7",
+    "colorama>=0.4.6",
+    "crawl4ai>=0.6.2",
+    "fastapi>=0.115.9",
+    "fastmcp>=2.2.5",
+    "google-adk>=0.3.0",
+    "pydantic>=2.11.3",
+    "pyyaml>=6.0.2",
+    "requests>=2.32.3",
+    "tenacity>=9.1.2",
+    "uvicorn>=0.34.2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3.5",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/jroakes/AutoMCP"
+"Bug Tracker" = "https://github.com/jroakes/AutoMCP/issues"
+
+[project.scripts]
+automcp = "src.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+path = "src/__init__.py"
+pattern = "__version__ = \"(?P<version>.+)\""
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
