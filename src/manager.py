@@ -8,13 +8,27 @@ import logging
 import os
 from typing import Dict, List
 
-from .utils import ApiConfig, load_spec_from_url, ServerRegistry, configure_logging
+from .utils import ApiConfig, load_spec_from_url, ServerRegistry
 from .openapi.tools import OpenAPIToolkit
 from .openapi.models import ApiAuthConfig, RateLimitConfig, RetryConfig
 from .documentation.crawler import DocumentationCrawler
 from .documentation.resources import ResourceManager
 from .prompt.generator import PromptGenerator
-from .mcp.server import MCPServer, MCPToolsetConfig
+from .mcp.config import MCPToolsetConfig
+from .mcp.server import MCPServer, create_server_from_config
+from .constants import (
+    DEFAULT_DB_DIRECTORY,
+    DEFAULT_EMBEDDING_MODEL,
+    DEFAULT_MAX_PAGES,
+    DEFAULT_MAX_DEPTH,
+    DEFAULT_RATE_LIMIT_DELAY,
+    DEFAULT_MAX_RETRIES,
+    DEFAULT_BACKOFF_FACTOR,
+    DEFAULT_RETRY_STATUS_CODES,
+    DEFAULT_REQUESTS_PER_MINUTE,
+    DEFAULT_HOST,
+    DEFAULT_PORT,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -215,7 +229,9 @@ def generate_tools(api_config: ApiConfig) -> List[Dict]:
     rate_limit_config = None
     if hasattr(api_config, "rate_limits") and api_config.rate_limits:
         rate_limit_config = RateLimitConfig(
-            requests_per_minute=api_config.rate_limits.get("per_minute", 60),
+            requests_per_minute=api_config.rate_limits.get(
+                "per_minute", DEFAULT_REQUESTS_PER_MINUTE
+            ),
             requests_per_hour=api_config.rate_limits.get("per_hour"),
             requests_per_day=api_config.rate_limits.get("per_day"),
             enabled=api_config.rate_limits.get("enabled", True),
@@ -225,10 +241,12 @@ def generate_tools(api_config: ApiConfig) -> List[Dict]:
     retry_config = None
     if hasattr(api_config, "retry") and api_config.retry:
         retry_config = RetryConfig(
-            max_retries=api_config.retry.get("max_retries", 3),
-            backoff_factor=api_config.retry.get("backoff_factor", 0.5),
+            max_retries=api_config.retry.get("max_retries", DEFAULT_MAX_RETRIES),
+            backoff_factor=api_config.retry.get(
+                "backoff_factor", DEFAULT_BACKOFF_FACTOR
+            ),
             retry_on_status_codes=api_config.retry.get(
-                "retry_on_status_codes", [429, 500, 502, 503, 504]
+                "retry_on_status_codes", DEFAULT_RETRY_STATUS_CODES
             ),
             enabled=api_config.retry.get("enabled", True),
         )
@@ -246,13 +264,13 @@ def generate_tools(api_config: ApiConfig) -> List[Dict]:
 
 
 def prepare_resource_manager(
-    api_config: ApiConfig, db_directory: str = "./.chromadb"
+    api_config: ApiConfig, db_directory: str
 ) -> ResourceManager:
     """Prepare a resource manager with crawled documentation.
 
     Args:
         api_config: API configuration
-        db_directory: Directory to store the vector database (overridden by config if specified)
+        db_directory: Directory to store the vector database
 
     Returns:
         ResourceManager instance with crawled documentation
@@ -264,28 +282,12 @@ def prepare_resource_manager(
         logger.warning("No documentation URL provided, skipping resource preparation")
         return None
 
-    # Get LLM API key from environment or config
-    llm_api_key = os.environ.get("OPENAI_API_KEY")
-
-    # Check if authentication has an LLM API key
-    if api_config.authentication and "llm_api_key" in api_config.authentication:
-        llm_api_key = api_config.authentication.get("llm_api_key")
-
-    # Use db_directory from config if provided, otherwise use the default
-    if api_config.db_directory:
-        api_db_directory = api_config.db_directory
-    else:
-        # Determine the database path for this specific API
-        api_name_slug = api_config.name.lower().replace(" ", "_")
-        api_db_directory = os.path.join(db_directory, api_name_slug)
-
     # Create a ResourceManager instance
     resource_manager = ResourceManager(
-        db_directory=api_db_directory,
+        db_directory=db_directory,
         embedding_type="openai",
-        openai_api_key=llm_api_key,
-        embedding_model="text-embedding-3-small",
-        server_name=api_config.name.lower().replace(" ", "_"),
+        embedding_model=DEFAULT_EMBEDDING_MODEL,
+        server_name=api_config.server_name,
     )
 
     # Crawl documentation if needed
@@ -293,8 +295,8 @@ def prepare_resource_manager(
         logger.info(f"Crawling documentation from {api_config.documentation_url}")
 
         # Set default crawler parameters
-        max_pages = 50
-        max_depth = 3
+        max_pages = DEFAULT_MAX_PAGES
+        max_depth = DEFAULT_MAX_DEPTH
         rendering = False
 
         # Get crawler config from api_config if available
@@ -315,7 +317,7 @@ def prepare_resource_manager(
             resource_manager=resource_manager,
             max_pages=max_pages,
             max_depth=max_depth,
-            rate_limit_delay=(1.0, 3.0),
+            rate_limit_delay=DEFAULT_RATE_LIMIT_DELAY,
             rendering=rendering,
         )
         crawler.crawl()
@@ -402,10 +404,9 @@ def create_mcp_config(
 
 def start_mcp_server(
     config_paths: List[str],
-    host: str = "0.0.0.0",
-    port: int = 8000,
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
     debug: bool = False,
-    db_directory: str = "./.chromadb",
 ):
     """Start an MCP server with multiple API configurations.
 
@@ -414,13 +415,9 @@ def start_mcp_server(
         host: Host to bind the server to
         port: Port to bind the server to
         debug: Whether to enable debug mode
-        db_directory: Directory to store the vector database
     """
     from fastapi import FastAPI
     import uvicorn
-
-    # Set up logging based on debug flag
-    configure_logging(debug)
 
     logger.info(
         f"Starting MCP server on {host}:{port} with {len(config_paths)} API configs"
@@ -446,40 +443,49 @@ def start_mcp_server(
     # Process each config and create MCP handlers
     for config_path in config_paths:
         try:
-            # Get config name (filename without extension)
-            config_name = os.path.basename(config_path).split(".")[0]
+            # ---------------------------
+            # Load and validate the config
+            # ---------------------------
 
-            # Process config
             api_config = process_config(config_path)
 
-            # Get the database directory from registry if available
-            api_db_dir = registry.get_db_directory(config_name) or os.path.join(
-                db_directory, config_name
+            # Canonical server_name from the ApiConfig
+            server_name = api_config.server_name
+
+            # ------------------------------------------------------
+            # Determine database directory path - always use consistent path
+            # ------------------------------------------------------
+            # Check if there's a registered path in the registry, otherwise create standard path
+            api_db_dir = registry.get_db_directory(server_name) or os.path.join(
+                DEFAULT_DB_DIRECTORY, server_name
             )
 
-            # Create resource manager (without crawling)
+            # --------------------------------------------------
+            # Create a ResourceManager that matches the crawler
+            # --------------------------------------------------
+
             resource_manager = ResourceManager(
                 db_directory=api_db_dir,
                 embedding_type="openai",
-                embedding_model="text-embedding-3-small",
-                server_name=config_name,
+                embedding_model=DEFAULT_EMBEDDING_MODEL,
+                server_name=server_name,
             )
 
             # Skip if resource DB doesn't exist (not crawled during add)
             if not resource_manager.exists():
                 logger.warning(
-                    f"No crawled documentation found for {config_name}. Run 'automcp add' first."
+                    f"No crawled documentation found for {server_name}. Run 'automcp add' first."
                 )
                 resource_manager = None
             else:
                 logger.debug(
-                    f"Using existing resource manager for {config_name} from {api_db_dir}"
+                    f"Using existing resource manager for {server_name} from {api_db_dir}"
                 )
 
             # Create MCP config
             mcp_config = create_mcp_config(api_config, resource_manager)
 
-            # Create and mount MCP server at /{config_name}
+            # Create and mount MCP server at /{server_name}/mcp.
             server = MCPServer(
                 config=mcp_config,
                 host=host,
@@ -488,16 +494,16 @@ def start_mcp_server(
                 db_directory=api_db_dir,
             )
 
-            # Mount the MCP handler at /{config_name}/mcp
-            app.mount(f"/{config_name}/mcp", server.mcp.app)
+            # Mount the FastMCP SSE sub-application at /{server_name}/mcp.
+            app.mount(f"/{server_name}/mcp", server.mcp.sse_app())
 
             # Add search endpoint if resource manager is available
             if resource_manager:
 
-                @app.get(f"/{config_name}/search")
+                @app.get(f"/{server_name}/search")
                 async def search_docs(
                     query: str,
-                    config_name=config_name,
+                    config_name=server_name,
                     resource_manager=resource_manager,
                 ):
                     """Search documentation."""
@@ -505,7 +511,7 @@ def start_mcp_server(
                     return {"results": results}
 
             logger.info(
-                f"Mounted MCP server for {api_config.name} at /{config_name}/mcp"
+                f"Mounted MCP server for {api_config.name} at /{server_name}/mcp"
             )
 
         except Exception as e:
@@ -516,5 +522,49 @@ def start_mcp_server(
         app,
         host=host,
         port=port,
-        log_level="debug" if debug else "warning",
+        log_level="warning",
+    )
+
+
+def create_mcp_server_from_config_file(
+    config_path: str,
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    debug: bool = False,
+    db_directory: str = DEFAULT_DB_DIRECTORY,
+) -> MCPServer:
+    """Create an MCP server from a configuration file.
+
+    Args:
+        config_path: Path to the configuration file
+        host: Host for the server
+        port: Port for the server
+        debug: Whether to enable debug mode
+        db_directory: Directory to store the vector database
+
+    Returns:
+        MCP server
+    """
+    # Process the configuration file
+    api_config = process_config(config_path)
+
+    # Determine the server name
+    server_name = api_config.server_name
+
+    # Determine the database directory
+    api_db_directory = os.path.join(db_directory, server_name)
+
+    # Create a resource manager and prepare it with documentation
+    resource_manager = prepare_resource_manager(api_config, api_db_directory)
+
+    # Create MCP config
+    mcp_config = create_mcp_config(api_config, resource_manager)
+
+    # Create and return the server
+    return create_server_from_config(
+        mcp_config=mcp_config,
+        host=host,
+        port=port,
+        debug=debug,
+        db_directory=api_db_directory,
     )

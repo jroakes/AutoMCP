@@ -225,11 +225,13 @@ Example search: "How to authenticate with {self.api_name}?"
                 mcp_prompts[prompt_id] = [
                     UserMessage("How should I use the tools in this API?"),
                     AssistantMessage(prompt.template),
+                    {"description": prompt.description},
                 ]
             elif prompt_id == "resource_usage_guide":
                 mcp_prompts[prompt_id] = [
                     UserMessage("How can I use the documentation resources?"),
                     AssistantMessage(prompt.template),
+                    {"description": prompt.description},
                 ]
             else:
                 # For other prompts, use the structure expected by FastMCP

@@ -200,6 +200,8 @@ class DocumentationCrawler:
             return []
 
         try:
+            # Get doc_id by normalizing the URL (removes scheme)
+            doc_id = self.resource_manager.normalize_url(url)
 
             chunker = SlidingWindowChunking(
                 window_size=self.chunk_size,
@@ -214,19 +216,20 @@ class DocumentationCrawler:
                 if not chunk_text.strip():
                     continue
 
-                # Create a unique ID for this chunk
-                chunk_id = f"{self.resource_manager.normalize_url(url)}_{i}"
+                # Create a unique ID for this chunk using doc_id
+                chunk_id = f"{doc_id}_{i}"
 
                 # Create chunk with metadata
                 chunk = DocumentationChunk(
                     id=chunk_id,
                     content=chunk_text,
-                    url=url,
+                    url=url,  # Keep original URL
                     title=title,
                     metadata={
                         "chunk_index": i,
                         "total_chunks": len(chunks_text),
                         "chunking_method": chunker.__class__.__name__,
+                        "doc_id": doc_id,  # Add doc_id to metadata
                     },
                 )
 
@@ -310,19 +313,22 @@ class DocumentationCrawler:
                         )
                         continue
 
+                    # Original URL for storing as metadata
+                    original_url = result.url
+
                     # Extract title, provide default if None or invalid
                     title = result.metadata.get("title")
                     if not isinstance(title, str) or not title:
                         original_title = title  # Keep original for logging
                         title = f"Untitled - {normalized_url}"
                         logger.warning(
-                            f"Page {normalized_url} has invalid title '{original_title}'. Using default: '{title}'"
+                            f"Page {original_url} has invalid title '{original_title}'. Using default: '{title}'"
                         )
-                    logger.debug(f"Processing: {normalized_url} (Title: {title})")
+                    logger.debug(f"Processing: {original_url} (Title: {title})")
 
                     # Get markdown content from result
                     if not hasattr(result, "markdown") or not result.markdown:
-                        logger.warning(f"No markdown content for {normalized_url}")
+                        logger.warning(f"No markdown content for {original_url}")
                         continue
 
                     # Use fit_markdown if available, otherwise use raw_markdown
@@ -335,7 +341,7 @@ class DocumentationCrawler:
                     # Skip if content is empty after processing
                     if not fit_markdown or not fit_markdown.strip():
                         logger.warning(
-                            f"Skipping {normalized_url} due to empty content after processing."
+                            f"Skipping {original_url} due to empty content after processing."
                         )
                         continue
 
@@ -343,11 +349,12 @@ class DocumentationCrawler:
                         # Create resource
                         resource = DocumentationResource(
                             id=normalized_url,
-                            url=normalized_url,
-                            title=title,  # Now guaranteed to be a string
+                            url=original_url,  # Store original URL
+                            title=title,
                             content=fit_markdown,
                             metadata={
-                                "original_url": result.url,
+                                "original_url": original_url,
+                                "doc_id": normalized_url,
                                 "crawled_at": time.time(),
                                 "depth": (
                                     result.metadata.get("depth", 0)

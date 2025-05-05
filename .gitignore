@@ -126,11 +126,12 @@ cython_debug/
 
 
 # Project Files
-automcp/
+automcp_venv/
 working/
 examples/
-.automcp/
+.automcp_cache/
 config_files/
 .cursorrules
 .cursorignore
 .ipynb
+demo.ipynb

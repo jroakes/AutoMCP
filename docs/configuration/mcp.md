@@ -72,7 +72,7 @@ automcp serve --host 127.0.0.1 --port 8080 --debug
 | `--port` | Port to bind the server to | `8000` |
 | `--debug` | Enable debug mode | `false` |
 | `--config` | Path to API configuration file or directory | None |
-| `--registry-file` | Path to the server registry file | `./.automcp/registry.json` |
+| `--registry-file` | Path to the server registry file | `./automcp_cache/registry.json` |
 
 ## Multi-API Configuration
 

@@ -10,3 +10,4 @@ chromadb
 fastmcp
 colorama
 tenacity
+python-dotenv

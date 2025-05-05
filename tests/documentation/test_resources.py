@@ -289,22 +289,31 @@ class TestResourceManager(unittest.TestCase):
         mock_collection = MagicMock()
         mock_client.get_or_create_collection.return_value = mock_collection
 
-        with patch(
-            "chromadb.utils.embedding_functions.HuggingFaceEmbeddingFunction"
-        ) as mock_hf_embedding:
-            # Initialize ResourceManager with HuggingFace
-            ResourceManager(
-                db_directory=self.temp_dir,
-                embedding_type="huggingface",
-                huggingface_api_key="test-hf-key",
-            )
+        # Set HUGGINGFACE_API_KEY in environment
+        os.environ["HUGGINGFACE_API_KEY"] = "test-hf-key"
 
-            # Check that HuggingFace embedding function was created
-            mock_hf_embedding.assert_called_once()
-            self.assertEqual(mock_hf_embedding.call_args[1]["api_key"], "test-hf-key")
+        try:
+            with patch(
+                "chromadb.utils.embedding_functions.HuggingFaceEmbeddingFunction"
+            ) as mock_hf_embedding:
+                # Initialize ResourceManager with HuggingFace
+                ResourceManager(
+                    db_directory=self.temp_dir,
+                    embedding_type="huggingface",
+                )
 
-            # Check that OpenAI embedding function was NOT used
-            mock_openai_embedding.assert_not_called()
+                # Check that HuggingFace embedding function was created
+                mock_hf_embedding.assert_called_once()
+                self.assertEqual(
+                    mock_hf_embedding.call_args[1]["api_key"], "test-hf-key"
+                )
+
+                # Check that OpenAI embedding function was NOT used
+                mock_openai_embedding.assert_not_called()
+        finally:
+            # Clean up environment
+            if "HUGGINGFACE_API_KEY" in os.environ:
+                del os.environ["HUGGINGFACE_API_KEY"]
 
     @patch("chromadb.PersistentClient")
     def test_is_empty_with_empty_collections(self, mock_persistent_client):

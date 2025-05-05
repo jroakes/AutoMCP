@@ -1,19 +1,23 @@
 """
-Name: Documentation resources.
-Description: Implements ResourceManager for managing documentation chunks with vector search capabilities using OpenAI embeddings. Provides functionality for storing, retrieving, and semantically searching API documentation content.
+Name: Document Resource Management.
+Description: Manages documentation resources, providing storage, indexing, and retrieval capabilities for documentation content through vector search.
 """
 
 import logging
 import os
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Any, Optional
+from urllib.parse import urlparse
 
-from urllib.parse import urlparse, urlunparse
-
-import numpy as np
 import chromadb
 from chromadb.utils import embedding_functions
 from pydantic import BaseModel, Field
+
+from ..constants import (
+    DEFAULT_DB_DIRECTORY,
+    DEFAULT_OPENAI_MODEL,
+    DEFAULT_SENTENCE_TRANSFORMER_MODEL,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +47,8 @@ class ResourceManager:
 
     def __init__(
         self,
-        db_directory: str = "./.chromadb",
+        db_directory: str = DEFAULT_DB_DIRECTORY,
         embedding_type: str = "openai",
-        openai_api_key: Optional[str] = None,
-        huggingface_api_key: Optional[str] = None,
         embedding_model: Optional[str] = None,
         server_name: str = "default",
     ):
@@ -55,8 +57,6 @@ class ResourceManager:
         Args:
             db_directory: Directory to store the vector database
             embedding_type: Type of embedding function to use ('openai' or 'huggingface')
-            openai_api_key: API key for OpenAI (if using OpenAI embeddings)
-            huggingface_api_key: API key for HuggingFace (if using HuggingFace embeddings)
             embedding_model: Model name to use for embeddings
             server_name: Name of the server for collection namespacing
         """
@@ -69,22 +69,22 @@ class ResourceManager:
 
         # Set up embedding function based on type
         if embedding_type == "openai":
-            self.openai_api_key = openai_api_key or os.environ.get("OPENAI_API_KEY")
-            if not self.openai_api_key:
-                raise ValueError("OpenAI API key is required for OpenAI embeddings")
+            openai_api_key = os.environ.get("OPENAI_API_KEY")
+            if not openai_api_key:
+                raise ValueError(
+                    "OPENAI_API_KEY environment variable is required for OpenAI embeddings"
+                )
 
-            model = embedding_model or "text-embedding-3-small"
+            model = embedding_model or DEFAULT_OPENAI_MODEL
             self.embedding_function = embedding_functions.OpenAIEmbeddingFunction(
-                api_key=self.openai_api_key, model_name=model
+                api_key=openai_api_key, model_name=model
             )
         elif embedding_type == "huggingface":
-            self.huggingface_api_key = huggingface_api_key or os.environ.get(
-                "HUGGINGFACE_API_KEY"
-            )
+            huggingface_api_key = os.environ.get("HUGGINGFACE_API_KEY")
 
-            model = embedding_model or "sentence-transformers/all-MiniLM-L6-v2"
+            model = embedding_model or DEFAULT_SENTENCE_TRANSFORMER_MODEL
             self.embedding_function = embedding_functions.HuggingFaceEmbeddingFunction(
-                api_key=self.huggingface_api_key if self.huggingface_api_key else None,
+                api_key=huggingface_api_key if huggingface_api_key else None,
                 model_name=model,
             )
         else:
@@ -102,25 +102,26 @@ class ResourceManager:
 
     @staticmethod
     def normalize_url(url: str) -> str:
-        """Normalize a URL by removing query parameters and fragments.
+        """Normalize a URL by removing scheme, query parameters and fragments.
+
+        This creates a document ID suitable for use in MCP URIs.
 
         Args:
             url: The URL to normalize
 
         Returns:
-            Normalized URL string
+            Normalized URL string without scheme
         """
         parsed = urlparse(url)
-        return urlunparse(
-            (
-                parsed.scheme,
-                parsed.netloc,
-                parsed.path,
-                "",  # Remove params
-                "",  # Remove query
-                "",  # Remove fragment
-            )
-        )
+
+        # Create a path that includes netloc and path but no scheme
+        doc_id = parsed.netloc + parsed.path
+
+        # Remove trailing slash if present
+        if doc_id.endswith("/"):
+            doc_id = doc_id[:-1]
+
+        return doc_id
 
     def add_resource(self, resource: DocumentationResource) -> None:
         """Add a documentation resource to the manager.
@@ -128,24 +129,32 @@ class ResourceManager:
         Args:
             resource: The documentation resource to add
         """
-        # Normalize the URL to use as a canonical ID
-        normalized_url = self.normalize_url(resource.url)
+        # Normalize the URL to use as a canonical ID (without scheme)
+        doc_id = self.normalize_url(resource.url)
+        original_url = resource.url
 
         # Add to ChromaDB without embeddings
         try:
+            # Chroma expects *lists* for every field when performing ``upsert``.
+            # The document collection does **not** need real embeddings because it
+            # is used only for look-ups / listing, so we omit the ``embeddings``
+            # argument entirely – this avoids shape-mismatch errors that were
+            # silently preventing the pages from being stored.
+
             self.docs_collection.upsert(
-                ids=[normalized_url],
+                ids=[doc_id],
                 documents=[resource.content],
                 metadatas=[
                     {
-                        "url": normalized_url,
+                        "url": original_url,  # Store the original URL as metadata
+                        "doc_id": doc_id,  # Store the doc_id as metadata
                         "title": resource.title,
                         **resource.metadata,
                     }
                 ],
-                embeddings=np.zeros(384),  # fill with zeroes
             )
-            logger.debug(f"Added resource to document collection: {normalized_url}")
+
+            logger.debug(f"Added resource to document collection: {doc_id}")
         except Exception as e:
             logger.error(
                 f"Error adding resource to document collection: {e} in upsert."
@@ -163,7 +172,14 @@ class ResourceManager:
                 ids=[chunk.id for chunk in chunks],
                 documents=[chunk.content for chunk in chunks],
                 metadatas=[
-                    {"url": chunk.url, "title": chunk.title, **chunk.metadata}
+                    {
+                        "url": chunk.url,  # Original URL
+                        "doc_id": self.normalize_url(
+                            chunk.url
+                        ),  # Add doc_id to metadata
+                        "title": chunk.title,
+                        **chunk.metadata,
+                    }
                     for chunk in chunks
                 ],
             )
@@ -171,28 +187,31 @@ class ResourceManager:
         except Exception as e:
             logger.error(f"Error adding chunks to vector DB: {e}")
 
-    def get_resource(self, url: str) -> Optional[DocumentationResource]:
-        """Get a documentation resource by URL.
+    def get_resource(self, doc_id: str) -> Optional[DocumentationResource]:
+        """Get a documentation resource by doc_id.
 
         Args:
-            url: The URL of the resource
+            doc_id: The document ID (normalized URL without scheme)
 
         Returns:
             The documentation resource, or None if not found
         """
-        normalized_url = self.normalize_url(url)
-
         try:
-            result = self.docs_collection.get(ids=[normalized_url])
+            result = self.docs_collection.get(ids=[doc_id])
             if result and result["documents"] and len(result["documents"]) > 0:
                 metadata = result["metadatas"][0] if result["metadatas"] else {}
+                # Get the original URL from metadata if available
+                original_url = metadata.get("url", "")
+
                 return DocumentationResource(
-                    id=normalized_url,
-                    url=normalized_url,
+                    id=doc_id,
+                    url=original_url,
                     title=metadata.get("title", ""),
                     content=result["documents"][0],
                     metadata={
-                        k: v for k, v in metadata.items() if k not in ["url", "title"]
+                        k: v
+                        for k, v in metadata.items()
+                        if k not in ["url", "title", "doc_id"]
                     },
                 )
         except Exception as e:
@@ -215,26 +234,25 @@ class ResourceManager:
                 metadata = results["metadatas"][i] if results["metadatas"] else {}
                 title = metadata.get("title", "Untitled")
 
-                # Format as MCP resource - use proper URI format
+                # Original URL can be obtained from metadata
+                original_url = metadata.get("url", "")
+
+                # Format as MCP resource with proper URI format
                 resources.append(
                     {
                         "uri": f"docs://{doc_id}",
                         "name": title,
                         "description": f"Documentation page: {title}",
+                        "content": results["documents"][i],
+                        "metadata": {
+                            "original_url": original_url,
+                            # Include other metadata that might be useful
+                            "doc_id": doc_id,
+                        },
                     }
                 )
 
-            # Add a special search resource with template URI
-            resources.append(
-                {
-                    "uri": "search://{query}",
-                    "name": "Search Documentation",
-                    "description": "Search across all documentation chunks with a query parameter",
-                }
-            )
-
             return resources
-
         except Exception as e:
             logger.error(f"Error listing resources: {e}")
             return []
@@ -247,96 +265,111 @@ class ResourceManager:
             limit: Maximum number of results to return
 
         Returns:
-            List of matching chunks with metadata
+            List of matching chunks
         """
-        results = self.chunks_collection.query(query_texts=[query], n_results=limit)
+        try:
+            if not query:
+                return []
 
-        # Format results
-        formatted_results = []
-        if results["documents"] and results["documents"][0]:
-            for i, (doc, metadata, distance) in enumerate(
-                zip(
-                    results["documents"][0],
-                    results["metadatas"][0],
-                    (
-                        results["distances"][0]
-                        if "distances" in results
-                        else [0] * len(results["documents"][0])
-                    ),
-                )
-            ):
+            # Search the chunks collection
+            results = self.chunks_collection.query(
+                query_texts=[query],
+                n_results=limit,
+            )
+
+            # Format results for consumption
+            formatted_results = []
+            for i, doc_id in enumerate(results["ids"][0]):
+                metadata = results["metadatas"][0][i] if results["metadatas"] else None
+                if not metadata:
+                    continue
+
+                # Get necessary metadata
+                url = metadata.get("url", "")
+                title = metadata.get("title", "Untitled")
+                content = results["documents"][0][i]
+
+                # Add to results
                 formatted_results.append(
                     {
-                        "content": doc,
-                        "url": metadata.get("url", ""),
-                        "title": metadata.get("title", ""),
-                        "relevance_score": (
-                            1.0 - (distance / 2) if distance else 1.0
-                        ),  # Normalize distance to a score
-                        "metadata": {
-                            k: v
-                            for k, v in metadata.items()
-                            if k not in ["url", "title"]
-                        },
+                        "id": doc_id,
+                        "url": url,
+                        "title": title,
+                        "content": content,
+                        "score": (
+                            results["distances"][0][i]
+                            if "distances" in results
+                            else None
+                        ),
                     }
                 )
 
-        return formatted_results
+            return formatted_results
+        except Exception as e:
+            logger.error(f"Error searching chunks: {e}")
+            return []
 
     def clear(self) -> None:
-        """Clear all resources from memory and the vector database."""
-        # Clear vector database collections
-        self.docs_collection.delete(where={})
-        self.chunks_collection.delete(where={})
-        logger.debug("Cleared vector database")
+        """Clear all data in the resource manager."""
+        try:
+            # Get collection names for this server
+            docs_collection_name = f"{self.server_name}_docs"
+            chunks_collection_name = f"{self.server_name}_chunks"
+
+            # Delete collections if they exist
+            try:
+                self.client.delete_collection(docs_collection_name)
+                self.client.delete_collection(chunks_collection_name)
+            except Exception:
+                # Collections might not exist, ignore
+                pass
+
+            # Recreate collections
+            self.docs_collection = self.client.get_or_create_collection(
+                name=docs_collection_name
+            )
+            self.chunks_collection = self.client.get_or_create_collection(
+                name=chunks_collection_name, embedding_function=self.embedding_function
+            )
+
+            logger.info(f"Cleared all data for server: {self.server_name}")
+        except Exception as e:
+            logger.error(f"Error clearing resources: {e}")
 
     def is_empty(self) -> bool:
         """Check if the resource manager is empty.
 
         Returns:
-            True if the resource manager has no documents, False otherwise
+            True if empty, False otherwise
         """
         try:
-            # Check if collections exist and have documents
-            collection_names = [c.name for c in self.client.list_collections()]
-
-            docs_collection_name = f"{self.server_name}_docs"
-            chunks_collection_name = f"{self.server_name}_chunks"
-
-            if (
-                docs_collection_name not in collection_names
-                or chunks_collection_name not in collection_names
-            ):
-                return True
-
-            return (
-                self.docs_collection.count() == 0 or self.chunks_collection.count() == 0
-            )
-        except Exception as e:
-            logger.warning(f"Error checking if collections are empty: {e}")
-            # If there's an error, assume it's empty
+            # Check if docs collection is empty
+            results = self.docs_collection.get()
+            return len(results.get("ids", [])) == 0
+        except Exception:
+            # If there's an error (e.g., collection doesn't exist), consider it empty
             return True
 
     def exists(self) -> bool:
-        """Check if the resource manager database exists.
+        """Check if the database for this resource manager exists.
 
         Returns:
-            True if the database directory exists and collections are created, False otherwise
+            True if the database exists, False otherwise
         """
-        try:
-            # Check if directory exists
-            if not os.path.exists(self.db_directory):
-                return False
+        if not os.path.exists(self.db_directory):
+            return False
 
-            # Check if collections exist with proper namespace
-            collection_names = [c.name for c in self.client.list_collections()]
+        try:
+            # Get collection names for this server
             docs_collection_name = f"{self.server_name}_docs"
             chunks_collection_name = f"{self.server_name}_chunks"
 
-            return (
-                docs_collection_name in collection_names
-                and chunks_collection_name in collection_names
-            )
-        except Exception as e:
-            logger.warning(f"Error checking if database exists: {e}")
+            # Check if collections exist in the database
+            return docs_collection_name in [
+                c.name for c in self.client.list_collections()
+            ] and chunks_collection_name in [
+                c.name for c in self.client.list_collections()
+            ]
+        except Exception:
+            # If there's an error accessing the database, consider it doesn't exist
             return False

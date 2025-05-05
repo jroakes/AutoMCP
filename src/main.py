@@ -13,6 +13,12 @@ import shutil
 import ssl
 from .manager import process_config, prepare_resource_manager, start_mcp_server
 from .utils import ServerRegistry, setup_environment
+from .constants import (
+    DEFAULT_DB_DIRECTORY,
+    DEFAULT_REGISTRY_FILE,
+    DEFAULT_HOST,
+    DEFAULT_PORT,
+)
 
 # Resolve ssl certificate issues.  We are not dealing with YMYL data here.
 ssl._create_default_https_context = ssl._create_unverified_context
@@ -39,25 +45,32 @@ def add_command(args):
 
     for config_path in config_paths:
         try:
-            # Get the API name from the filename or from the config
-            config_name = os.path.basename(config_path).split(".")[0]
+            # ---------------------------------------------
+            # Load and validate the JSON configuration file
+            # ---------------------------------------------
 
-            # Process config
             api_config = process_config(config_path)
 
-            # Use db_directory from config, args, or default based on API name
-            if api_config.db_directory:
-                db_directory = api_config.db_directory
-            elif args.db_directory:
-                db_directory = os.path.join(args.db_directory, config_name)
-            else:
-                db_directory = os.path.join("./.chromadb", config_name)
+            # --------------------------------------------------
+            # Use the server_name property from ApiConfig
+            # --------------------------------------------------
+            # Fallback to the filename stem only if name is missing
+            server_name = (
+                api_config.server_name or os.path.basename(config_path).split(".")[0]
+            )
+
+            # -------------------------------------------
+            # Create a standardized DB directory path
+            # -------------------------------------------
+            # Always use DEFAULT_DB_DIRECTORY/server_name for consistency
+            db_directory = os.path.join(DEFAULT_DB_DIRECTORY, server_name)
 
             # Initialize resource manager and crawl documentation
             prepare_resource_manager(api_config, db_directory=db_directory)
 
-            # Register the API
-            registry.add_server(config_name, os.path.abspath(config_path), db_directory)
+            # Register the API using the server_name as the key so that `serve`
+            # can later look it up unambiguously.
+            registry.add_server(server_name, os.path.abspath(config_path), db_directory)
 
             logger.info(f"Added and crawled documentation for {api_config.name}")
         except Exception as e:
@@ -174,7 +187,6 @@ def serve_command(args):
         host=args.host,
         port=args.port,
         debug=args.debug,
-        db_directory=args.db_directory,
     )
 
 
@@ -208,14 +220,15 @@ def install_claude_command(args):
         tools = []
 
         for config_path in config_paths:
-            # Get the API name from the filename
-            api_name = os.path.basename(config_path).split(".")[0]
+            # Process the configuration to get the server_name consistently
+            api_config = process_config(config_path)
+            server_name = api_config.server_name
 
             # Add a tool for this API
             tools.append(
                 {
-                    "name": api_name,
-                    "url": f"http://{args.host}:{args.port}/{api_name}/mcp",
+                    "name": server_name,
+                    "url": f"http://{args.host}:{args.port}/{server_name}/mcp",
                     "schema_version": "v1",
                 }
             )
@@ -247,22 +260,12 @@ def main():
         parser.add_argument(
             "--registry-file",
             type=str,
-            default="./.automcp/registry.json",
+            default=DEFAULT_REGISTRY_FILE,
             help="Path to the server registry file",
-        )
-
-    def add_db_directory_arg(parser):
-        """Add database directory argument to parser."""
-        parser.add_argument(
-            "--db-directory",
-            type=str,
-            default="./.chromadb",
-            help="Directory to store the vector database",
         )
 
     # Common arguments
     registry_file_arg = add_registry_file_arg
-    db_directory_arg = add_db_directory_arg
 
     # Add command (replaces crawl)
     add_parser = subparsers.add_parser("add", help="Add an API to AutoMCP")
@@ -272,7 +275,6 @@ def main():
         required=True,
         help="Path to API configuration file or directory with JSON configs",
     )
-    db_directory_arg(add_parser)
     registry_file_arg(add_parser)
 
     # List servers command
@@ -315,13 +317,12 @@ def main():
         help="Path to API configuration file or directory with JSON configs (optional, uses registry if not specified)",
     )
     serve_parser.add_argument(
-        "--host", type=str, default="0.0.0.0", help="Host to bind the server to"
+        "--host", type=str, default=DEFAULT_HOST, help="Host to bind the server to"
     )
     serve_parser.add_argument(
-        "--port", type=int, default=8000, help="Port to bind the server to"
+        "--port", type=int, default=DEFAULT_PORT, help="Port to bind the server to"
     )
     serve_parser.add_argument("--debug", action="store_true", help="Enable debug mode")
-    db_directory_arg(serve_parser)
     registry_file_arg(serve_parser)
 
     # Install command
@@ -344,7 +345,10 @@ def main():
         "--host", type=str, default="localhost", help="Host where MCP server is running"
     )
     claude_parser.add_argument(
-        "--port", type=int, default=8000, help="Port where MCP server is running"
+        "--port",
+        type=int,
+        default=DEFAULT_PORT,
+        help="Port where MCP server is running",
     )
     claude_parser.add_argument(
         "--output",

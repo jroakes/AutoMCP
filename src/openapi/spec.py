@@ -56,8 +56,8 @@ def reduce_openapi_spec(
             out["summary"] = docs.get("summary")
         if docs.get("parameters"):
             out["parameters"] = [parameter for parameter in docs.get("parameters", [])]
-        if docs.get("responses") and "200" in docs["responses"]:
-            out["responses"] = {"200": docs["responses"]["200"]}
+        if docs.get("responses"):
+            out["responses"] = docs["responses"]  # Keep all response codes
         if docs.get("requestBody"):
             out["requestBody"] = docs.get("requestBody")
         return out

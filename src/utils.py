@@ -1,49 +1,55 @@
 """
 Name: Utility functions.
-Description: Provides utility functions for loading OpenAPI specs from files or URLs, defining the ApiConfig model for API configurations, and implementing the ServerRegistry for managing API server registrations. Offers core functionality used across the AutoMCP system.
+Description: Common utility functions for AutoMCP, including loading OpenAPI specs, managing server registries, and logging.
 """
 
+import datetime
 import json
 import logging
 import os
-from typing import Any, Dict, List, Optional
-import datetime
+import sys
+from typing import Dict, List, Optional, Any
 
-import yaml
 import requests
+import yaml
 from pydantic import BaseModel
 
+from .constants import DEFAULT_REGISTRY_FILE
+
+# Configure logging
 logger = logging.getLogger(__name__)
 
 
 def configure_logging(debug: bool = False):
-    """Configure logging for the entire application.
+    """Configure logging for the application.
 
     Args:
-        debug: If True, set logging level to DEBUG, otherwise INFO
+        debug: Whether to enable debug mode
     """
-    level = logging.DEBUG if debug else logging.INFO
+    logging_level = logging.DEBUG if debug else logging.INFO
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging_level)
 
-    logging.basicConfig(
-        level=level, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    # Check if handlers are already configured to prevent duplicates
+    if root_logger.handlers:
+        # Update existing handlers with the current log level
+        for handler in root_logger.handlers:
+            if isinstance(handler, logging.StreamHandler):
+                handler.setLevel(logging_level)
+        return
+
+    # Create console handler
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging_level)
+
+    # Create formatter
+    formatter = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
+    console_handler.setFormatter(formatter)
 
-    if debug:
-        logging.getLogger("automcp").setLevel(logging.DEBUG)
-        logging.getLogger("openapi").setLevel(logging.DEBUG)
-    else:
-        logging.getLogger("automcp").setLevel(logging.INFO)
-        logging.getLogger("openapi").setLevel(logging.INFO)
-        # Set documentation resources to DEBUG even in non-debug mode
-
-    # Set chromadb logger to WARNING to reduce logging
-    logging.getLogger("chromadb").setLevel(logging.WARNING)
-
-    # Set NLTK logger to be less verbose
-    logging.getLogger("nltk").setLevel(logging.WARNING)
-
-    # Set httpx logger to WARNING to reduce HTTP request logging
-    logging.getLogger("httpx").setLevel(logging.WARNING)
+    # Add handler to the logger
+    root_logger.addHandler(console_handler)
 
 
 def load_spec_from_file(file_path: str) -> Dict[str, Any]:
@@ -107,15 +113,23 @@ class ApiConfig(BaseModel):
     authentication: Optional[Dict[str, Any]] = None
     rate_limits: Optional[Dict[str, Any]] = None
     retry: Optional[Dict[str, Any]] = None
-    db_directory: Optional[str] = None
     crawl: Optional[Dict[str, Any]] = None
     prompts: Optional[List[Dict[str, str]]] = None
+
+    @property
+    def server_name(self) -> str:
+        """Get the standardized server name (lowercase with underscores).
+
+        Returns:
+            Standardized server name for use in URLs and file paths
+        """
+        return self.name.lower().replace(" ", "_") if self.name else ""
 
 
 class ServerRegistry:
     """Registry for managing API servers."""
 
-    def __init__(self, registry_path: str = "./.automcp/registry.json"):
+    def __init__(self, registry_path: str = DEFAULT_REGISTRY_FILE):
         """Initialize the server registry.
 
         Args:
@@ -236,12 +250,24 @@ class ServerRegistry:
 def setup_environment():
     """Setup the environment for the application.
 
+    - Loads environment variables from .env file
     - Downloads required NLTK resources
     - Configures logging
     """
     import nltk
 
+    # Configure logging first
     configure_logging()
+
+    try:
+        from dotenv import load_dotenv
+
+        load_dotenv()
+        logger.debug("Loaded environment variables from .env file")
+    except ImportError:
+        logger.warning(
+            "python-dotenv not installed. Environment variables will only be loaded from system."
+        )
 
     nltk.download("punkt", quiet=True)
     nltk.download("stopwords", quiet=True)

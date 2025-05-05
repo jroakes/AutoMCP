@@ -70,12 +70,13 @@ For more control, you can add:
     "max_depth": 3,
     "max_pages": 100
   },
-  "prompts": {
-    "example_prompt": {
-      "description": "An example prompt for this API",
+  "prompts": [
+    {
+      "name": "example_prompt",
+      "description": "An example prompt for the API",
       "content": "Here is how to use the API effectively..."
     }
-  }
+  ]
 }
 ```
 

@@ -36,7 +36,7 @@ python -m src.main add --config <path>
 |--------|-------------|---------|
 | `--config` | Path to API configuration file or directory with JSON configs | (required) |
 | `--db-directory` | Directory to store the vector database | `./.chromadb` |
-| `--registry-file` | Path to the server registry file | `./.automcp/registry.json` |
+| `--registry-file` | Path to the server registry file | `./automcp_cache/registry.json` |
 
 ### Examples
 
@@ -67,7 +67,7 @@ python -m src.main list-servers
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--registry-file` | Path to the server registry file | `./.automcp/registry.json` |
+| `--registry-file` | Path to the server registry file | `./automcp_cache/registry.json` |
 
 ### Example Output
 
@@ -97,7 +97,7 @@ python -m src.main remove --name <server_name>
 |--------|-------------|---------|
 | `--name` | Name of the API server to remove | (required) |
 | `--keep-data` | Preserve the associated database directory | `false` |
-| `--registry-file` | Path to the server registry file | `./.automcp/registry.json` |
+| `--registry-file` | Path to the server registry file | `./automcp_cache/registry.json` |
 
 ### Examples
 
@@ -127,7 +127,7 @@ python -m src.main delete --name <server_name>
 |--------|-------------|---------|
 | `--name` | Name of the API server to delete | (required) |
 | `--clean` | Also delete the database directory | `false` |
-| `--registry-file` | Path to the server registry file | `./.automcp/registry.json` |
+| `--registry-file` | Path to the server registry file | `./automcp_cache/registry.json` |
 
 ### Examples
 
@@ -158,7 +158,7 @@ python -m src.main serve [options]
 | `--port` | Port to bind the server to | `8000` |
 | `--debug` | Enable debug mode | `false` |
 | `--db-directory` | Directory to store the vector database | `./.chromadb` |
-| `--registry-file` | Path to the server registry file | `./.automcp/registry.json` |
+| `--registry-file` | Path to the server registry file | `./automcp_cache/registry.json` |
 
 ### Examples
 
@@ -201,7 +201,7 @@ Currently supported platforms:
 | `--host` | Host where MCP server is running | `localhost` |
 | `--port` | Port where MCP server is running | `8000` |
 | `--output` | Path to write Claude configuration file | `.claude.json` |
-| `--registry-file` | Path to the server registry file | `./.automcp/registry.json` |
+| `--registry-file` | Path to the server registry file | `./.automcp_cache/registry.json` |
 
 ### Examples
 

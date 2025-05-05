@@ -495,3 +495,31 @@ class OpenAPIToolkit:
             A list of tool schemas
         """
         return [tool.to_schema() for tool in self.tools]
+
+async def execute_tool(
+    tool_schema: Dict[str, Any], 
+    toolkit: "OpenAPIToolkit", 
+    parameters: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Execute a tool using the OpenAPI toolkit.
+    
+    Args:
+        tool_schema: Tool schema definition
+        toolkit: OpenAPIToolkit instance
+        parameters: Parameters for the tool
+        
+    Returns:
+        The result of the tool execution
+    """
+    tool_name = tool_schema.get("name")
+    if not tool_name:
+        raise ValueError("Tool schema missing 'name' field")
+    
+    # Find the tool in the toolkit
+    tool = toolkit.get_tool(tool_name)
+    if not tool:
+        raise ValueError(f"Tool '{tool_name}' not found in toolkit")
+    
+    # Execute the tool with parameters
+    result = tool.execute(**parameters)
+    return result
