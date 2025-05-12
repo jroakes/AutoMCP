@@ -1006,14 +1006,14 @@ generator = PromptGenerator(
     api_name="GitHub API",
     api_description="GitHub REST API",
     tools=[...],  # List of tool schemas
-    resources={...}  # Dictionary of resources
+    resources={}
 )
 
 # Generate prompts
-prompts = generator.to_mcp_prompts()
+prompts = generator.generate_prompts()
 
 # Use specific prompt
-system_prompt = prompts["system"]
+system_prompt = prompts[0].fn()
 ```
 
 ## Prompt Types

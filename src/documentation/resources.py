@@ -94,6 +94,7 @@ class ResourceManager:
         self.docs_collection = self.client.get_or_create_collection(
             name=f"{server_name}_docs",
             # default embedding function will be used
+            # TODO: We should have an identity embedding function for this that is much faster
         )
 
         self.chunks_collection = self.client.get_or_create_collection(
@@ -118,8 +119,7 @@ class ResourceManager:
         doc_id = parsed.netloc + parsed.path
 
         # Remove trailing slash if present
-        if doc_id.endswith("/"):
-            doc_id = doc_id[:-1]
+        doc_id = doc_id[:-1] if doc_id.endswith("/") else doc_id
 
         return doc_id
 
@@ -246,7 +246,6 @@ class ResourceManager:
                         "content": results["documents"][i],
                         "metadata": {
                             "original_url": original_url,
-                            # Include other metadata that might be useful
                             "doc_id": doc_id,
                         },
                     }

@@ -307,3 +307,62 @@ def credential_to_param(
         return param, kwargs
 
     return None, None
+
+
+def build_httpx_auth(auth_config):
+    """
+    Converts ApiAuthConfig to httpx-compatible auth configuration.
+    
+    Args:
+        auth_config: Authentication configuration
+        
+    Returns:
+        tuple[dict, Any]: A tuple of (default_headers, httpx_auth_object_or_None)
+        that can be passed directly to httpx.AsyncClient constructor.
+    """
+    import httpx
+    
+    if not auth_config:
+        return {}, None
+        
+    headers = {}
+    auth = None
+    
+    if auth_config.type == "apiKey":
+        if auth_config.in_field == "header" and auth_config.name:
+            # For header-based API keys, add to default headers
+            headers[auth_config.name] = auth_config.value
+        # For query-based API keys, we'll add them per-request
+        
+    elif auth_config.type == "http":
+        if auth_config.scheme == "basic":
+            # Check if username AND password are provided
+            if hasattr(auth_config, "username") and auth_config.username is not None and \
+               hasattr(auth_config, "password") and auth_config.password is not None:
+                # Use httpx's BasicAuth class
+                auth = httpx.BasicAuth(auth_config.username, auth_config.password)
+            # Check if value is provided and looks like user:pass (for potential splitting)
+            elif hasattr(auth_config, "value") and auth_config.value and ":" in auth_config.value:
+                try:
+                    username, password = auth_config.value.split(":", 1)
+                    auth = httpx.BasicAuth(username, password)
+                except ValueError:
+                    # If splitting fails or format is unexpected, treat as pre-formatted header value
+                    logger.warning("Basic auth value format unexpected, treating as pre-formatted header.")
+                    headers["Authorization"] = f"Basic {auth_config.value}"
+            # Check if only value is provided (assume pre-formatted/encoded)
+            elif hasattr(auth_config, "value") and auth_config.value:
+                headers["Authorization"] = f"Basic {auth_config.value}"
+            # Else, invalid basic auth config provided
+            else:
+                 logger.warning("Invalid configuration for HTTP Basic Auth. Provide username/password or a value.")
+                
+        elif auth_config.scheme == "bearer":
+            # Bearer token in Authorization header
+            headers["Authorization"] = f"Bearer {auth_config.value}"
+            
+    elif auth_config.type == "oauth2":
+        # OAuth2 uses Bearer format in Authorization header
+        headers["Authorization"] = f"Bearer {auth_config.value}"
+        
+    return headers, auth

@@ -12,6 +12,7 @@ DEFAULT_DB_DIRECTORY = "./.chromadb"
 DEFAULT_REGISTRY_FILE = "./.automcp_cache/registry.json"
 
 # Embedding model settings
+DEFAULT_EMBEDDING_TYPE = "openai"
 DEFAULT_EMBEDDING_MODEL = "text-embedding-3-small"
 DEFAULT_OPENAI_MODEL = "text-embedding-3-small"
 DEFAULT_SENTENCE_TRANSFORMER_MODEL = "sentence-transformers/all-MiniLM-L6-v2"

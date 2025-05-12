@@ -51,10 +51,9 @@ For more control, you can add:
   "openapi_spec_url": "https://example.com/openapi.json",
   "documentation_url": "https://example.com/docs",
   "authentication": {
-    "type": "apiKey",
-    "in": "header",
-    "name": "Authorization",
-    "value": "Bearer ${API_KEY}"
+    "type": "http",
+    "scheme": "bearer",
+    "value": "${API_KEY}"
   },
   "rate_limits": {
     "per_minute": 60,

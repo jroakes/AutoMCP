@@ -26,6 +26,13 @@ cd automcp
 pip install -r requirements.txt
 ```
 
+## Documentation
+
+- [Usage Guide](#usage) - Instructions for configuring and running AutoMCP
+- [MCP Migration Guide](docs/mcp_migration_guide.md) - Guide for updating from decorator-based implementation to explicit method calls
+- [System Components](#system-components) - Overview of AutoMCP's main components
+- [Testing](#testing) - Information about the test suite
+
 ## Usage
 
 ### Configuration
@@ -59,6 +66,16 @@ Create a JSON configuration file with the following structure:
     "retry_on_status_codes": [429, 500, 502, 503, 504],
     "enabled": true
   }
+}
+```
+
+For APIs using HTTP Bearer authentication, the configuration would look like:
+
+```json
+"authentication": {
+  "type": "http",
+  "scheme": "bearer",
+  "value": "your-token-here"
 }
 ```
 

@@ -4,10 +4,11 @@ Description: Implements RestApiTool and OpenAPIToolkit classes for creating LLM-
 """
 
 import logging
-import time
 from typing import Any, Dict, List, Optional
 
-import requests
+import httpx
+import tenacity
+from fastmcp.tools.tool import Tool, _convert_to_content
 
 from .spec import OpenAPISpecParser
 from .auth import auth_helpers
@@ -17,9 +18,8 @@ from .models import (
     ApiAuthConfig,
     RateLimitConfig,
     RetryConfig,
-    PaginationConfig,
 )
-from .utils import RateLimiter, RetryHandler, PaginationHandler
+from .utils import RateLimiter, RetryHandler
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,6 @@ class RestApiTool:
         auth_config: Optional[ApiAuthConfig] = None,
         rate_limit_config: Optional[RateLimitConfig] = None,
         retry_config: Optional[RetryConfig] = None,
-        pagination_config: Optional[PaginationConfig] = None,
     ):
         """Initialize a REST API tool.
 
@@ -48,7 +47,6 @@ class RestApiTool:
             auth_config: Authentication configuration
             rate_limit_config: Rate limiting configuration
             retry_config: Retry configuration
-            pagination_config: Pagination configuration
         """
         self.name = name
         self.description = description
@@ -58,13 +56,9 @@ class RestApiTool:
         self.auth_scheme = None
         self.auth_credential = None
 
-        # Set up rate limiting and retry handling
+        # Store configs
         self.rate_limit_config = rate_limit_config or RateLimitConfig()
         self.retry_config = retry_config or RetryConfig()
-        self.pagination_config = pagination_config or PaginationConfig()
-        self.rate_limiter = RateLimiter(self.rate_limit_config)
-        self.retry_handler = RetryHandler(self.retry_config)
-        self.pagination_handler = PaginationHandler(self.pagination_config)
 
         # Setup auth scheme and credential using auth_helpers if auth_config is provided
         if auth_config:
@@ -169,7 +163,7 @@ class RestApiTool:
         return schema
 
     def execute(self, **kwargs: Any) -> Dict[str, Any]:
-        """Execute the API request with retry and rate limiting.
+        """Execute the API request (synchronous wrapper).
 
         Args:
             **kwargs: Parameters for the API request
@@ -177,16 +171,20 @@ class RestApiTool:
         Returns:
             The API response
         """
-        # Check rate limits before making the request
-        wait_time = self.rate_limiter.wait_time_seconds()
-        if wait_time > 0:
-            logger.info(
-                f"Rate limit reached. Waiting {wait_time:.2f} seconds before making request."
-            )
-            time.sleep(wait_time)
+        import anyio
+        return anyio.run(self.execute_async, **kwargs)
 
+    async def execute_async(self, **kwargs: Any) -> Dict[str, Any]:
+        """Execute the API request asynchronously.
+
+        Args:
+            **kwargs: Parameters for the API request
+
+        Returns:
+            The API response
+        """
         # Prepare URL with path parameters
-        url = f"{self.base_url}{self.endpoint.path}"
+        url = self.endpoint.path
 
         # Separate parameters by location
         path_params = {}
@@ -194,6 +192,7 @@ class RestApiTool:
         header_params = {}
         body_params = {}
 
+        # Process parameters by location
         for param in self.endpoint.parameters:
             if param.name in kwargs:
                 value = kwargs[param.name]
@@ -210,153 +209,40 @@ class RestApiTool:
         for param_name, param_value in path_params.items():
             url = url.replace(f"{{{param_name}}}", str(param_value))
 
-        # Add authentication if configured using auth_helpers
+        # Add authentication if configured using auth_helpers - only for query params
+        # (Headers are already handled by the shared client)
         if self.auth_scheme and self.auth_credential:
             try:
                 api_param, auth_kwargs = auth_helpers.credential_to_param(
                     self.auth_scheme, self.auth_credential
                 )
-                if api_param and auth_kwargs:
-                    # Extract the auth parameter and add it to the appropriate location
+                if api_param and auth_kwargs and api_param.location == "query":
+                    # Add query parameters
                     for param_name, param_value in auth_kwargs.items():
                         # Remove the internal prefix from auth_helpers
                         clean_name = param_name.replace(
                             auth_helpers.INTERNAL_AUTH_PREFIX, ""
                         )
-                        if api_param.location == "header":
-                            header_params[clean_name] = param_value
-                        elif api_param.location == "query":
-                            query_params[clean_name] = param_value
+                        query_params[clean_name] = param_value
             except ValueError as e:
                 logger.error(f"Error applying auth: {e}")
-
-        # If pagination is enabled, prepare for collecting paginated responses
-        paginated_responses = []
-        current_page = 0
-        current_query_params = query_params.copy()
-        current_url = url
-
-        while True:
-            # Implement retry loop with exponential backoff
-            attempt = 0
-            while True:
-                try:
-                    # Consume a rate limit token
-                    self.rate_limiter.consume_token()
-
-                    # Make the request
-                    method = self.endpoint.method.lower()
-                    if method == "get":
-                        response = requests.get(
-                            current_url,
-                            params=current_query_params,
-                            headers=header_params,
-                            timeout=30,
-                        )
-                    elif method == "post":
-                        response = requests.post(
-                            current_url,
-                            params=current_query_params,
-                            headers=header_params,
-                            json=body_params if body_params else None,
-                            timeout=30,
-                        )
-                    else:
-                        raise ValueError(f"Unsupported HTTP method: {method}")
-
-                    # Check status code and raise for retry if needed
-                    if self.retry_handler.should_retry(response.status_code, attempt):
-                        attempt += 1
-                        backoff_time = self.retry_handler.get_backoff_time(attempt)
-                        logger.info(
-                            f"Request failed with status {response.status_code}. "
-                            f"Retrying in {backoff_time:.2f} seconds (attempt {attempt}/{self.retry_config.max_retries})"
-                        )
-                        time.sleep(backoff_time)
-                        continue
-
-                    # Raise for other error status codes
-                    response.raise_for_status()
-
-                    # Parse response
-                    if response.content:
-                        try:
-                            response_data = response.json()
-                        except ValueError:
-                            response_data = {"text": response.text}
-                    else:
-                        response_data = {
-                            "status": "Success",
-                            "status_code": response.status_code,
-                        }
-
-                    # Add response to paginated responses if pagination is enabled
-                    if self.pagination_config.enabled:
-                        paginated_responses.append(response_data)
-
-                        # Get parameters for next page
-                        next_page_params = (
-                            self.pagination_handler.prepare_next_page_params(
-                                original_params=current_query_params,
-                                current_page=current_page,
-                                response_data=response_data,
-                                response_headers=dict(response.headers),
-                            )
-                        )
-
-                        if next_page_params:
-                            current_page += 1
-
-                            # Handle special case where we have a full URL from Link header
-                            if "_pagination_next_url" in next_page_params:
-                                current_url = next_page_params["_pagination_next_url"]
-                                current_query_params = (
-                                    {}
-                                )  # Clear query params as they're in the URL
-                            else:
-                                current_query_params = next_page_params
-
-                            # Continue to next page
-                            break
-                        else:
-                            # No more pages, combine results and return
-                            if len(paginated_responses) > 1:
-                                return self.pagination_handler.combine_results(
-                                    paginated_responses
-                                )
-                            else:
-                                return response_data
-                    else:
-                        # Pagination not enabled, return single response
-                        return response_data
-
-                except requests.exceptions.RequestException as e:
-                    if (
-                        attempt < self.retry_config.max_retries
-                        and self.retry_config.enabled
-                    ):
-                        attempt += 1
-                        backoff_time = self.retry_handler.get_backoff_time(attempt)
-                        logger.info(
-                            f"Request failed with error: {str(e)}. "
-                            f"Retrying in {backoff_time:.2f} seconds (attempt {attempt}/{self.retry_config.max_retries})"
-                        )
-                        time.sleep(backoff_time)
-                    else:
-                        logger.error(
-                            f"Request failed after {attempt} attempts: {str(e)}"
-                        )
-                        raise
-
-            # If we got here and are not paginating, break the loop
-            if not self.pagination_config.enabled:
-                break
-
-        # This should only be reached if pagination is enabled but no results were found
-        if paginated_responses:
-            return self.pagination_handler.combine_results(paginated_responses)
-        else:
-            return {"error": "No response data available"}
+        
+        # Determine the HTTP method
+        method = self.endpoint.method.lower()
+        
+        # Prepare JSON body if needed
+        json_body = body_params if body_params else None
+        
+        # Execute the request using the toolkit's request method
+        result = await self._toolkit.request(
+            method, 
+            url,
+            params=query_params,
+            headers=header_params,
+            json=json_body
+        )
+        
+        return result
 
 
 class OpenAPIToolkit:
@@ -368,7 +254,6 @@ class OpenAPIToolkit:
         auth_config: Optional[ApiAuthConfig] = None,
         rate_limit_config: Optional[RateLimitConfig] = None,
         retry_config: Optional[RetryConfig] = None,
-        pagination_config: Optional[PaginationConfig] = None,
     ):
         """Initialize an OpenAPI toolkit.
 
@@ -377,15 +262,100 @@ class OpenAPIToolkit:
             auth_config: Authentication configuration
             rate_limit_config: Rate limiting configuration
             retry_config: Retry configuration
-            pagination_config: Pagination configuration
+
+        Raises:
+            ValueError: If authentication is required by the OpenAPI spec but not provided in config
         """
         self.spec_parser = OpenAPISpecParser(spec)
         self.base_url = self.spec_parser.get_base_url()
+        
+        # Validate authentication requirements
+        security_schemes = self.spec_parser.get_security_schemes()
+        security_reqs = self.spec_parser.get_security_requirements()
+        
+        if security_reqs and security_schemes:
+            # Check if auth is required but not provided
+            first_req_name = list(security_reqs[0].keys())[0]
+            if first_req_name in security_schemes:
+                scheme_info = security_schemes[first_req_name]
+                scheme_type = scheme_info.get("type")
+                
+                # OAuth2 is not supported in this release
+                if scheme_type == "oauth2":
+                    raise ValueError("OAuth2 authentication is not supported in this release")
+                
+                # If auth is required but not provided, raise error
+                if not auth_config:
+                    if scheme_type == "apiKey":
+                        raise ValueError(
+                            f"API requires '{scheme_type}' authentication with key '{scheme_info.get('name')}' "
+                            f"in {scheme_info.get('in')}, but no authentication config was provided"
+                        )
+                    elif scheme_type == "http":
+                        raise ValueError(
+                            f"API requires HTTP {scheme_info.get('scheme')} authentication, "
+                            f"but no authentication config was provided"
+                        )
+                    else:
+                        raise ValueError(
+                            f"API requires '{scheme_type}' authentication, but no authentication config was provided"
+                        )
+                
+                # Validate that the provided auth matches the required scheme
+                if auth_config:
+                    if scheme_type == "apiKey" and auth_config.type != "apiKey":
+                        raise ValueError(
+                            f"API requires apiKey authentication but config provided {auth_config.type}. "
+                            f"Please update your configuration to use 'type': 'apiKey'"
+                        )
+                    elif scheme_type == "http" and auth_config.type != "http":
+                        raise ValueError(
+                            f"API requires HTTP authentication but config provided {auth_config.type}. "
+                            f"For Bearer token authentication, use: "
+                            f"{{'type': 'http', 'scheme': 'bearer', 'value': 'your-token-here'}} "
+                            f"instead of apiKey type with Authorization header."
+                        )
+                    
+                    # Further validation for apiKey
+                    if scheme_type == "apiKey" and auth_config.type == "apiKey":
+                        if auth_config.name != scheme_info.get("name") or auth_config.in_field != scheme_info.get("in"):
+                            raise ValueError(
+                                f"API requires apiKey '{scheme_info.get('name')}' in {scheme_info.get('in')}, "
+                                f"but config specified '{auth_config.name}' in {auth_config.in_field}"
+                            )
+                    
+                    # Further validation for HTTP
+                    if scheme_type == "http" and auth_config.type == "http":
+                        if auth_config.scheme != scheme_info.get("scheme"):
+                            raise ValueError(
+                                f"API requires HTTP {scheme_info.get('scheme')} authentication, "
+                                f"but config specified HTTP {auth_config.scheme}"
+                            ) 
+        
         self.auth_config = auth_config
-        self.rate_limit_config = rate_limit_config
-        self.retry_config = retry_config
-        self.pagination_config = pagination_config
+        self.rate_limit_config = rate_limit_config or RateLimitConfig()
+        self.retry_config = retry_config or RetryConfig()
+        
+        # Set up centralized rate limiting and retry handling
+        self._rate_limiter = RateLimiter(self.rate_limit_config)
+        self._retry_handler = RetryHandler(self.retry_config)
+        
+        # Set up shared httpx client with auth
+        self._headers, self._httpx_auth = auth_helpers.build_httpx_auth(auth_config)
+        self._client = httpx.AsyncClient(
+            base_url=self.base_url,
+            headers=self._headers,
+            auth=self._httpx_auth,
+            timeout=getattr(self.retry_config, "timeout", 30),
+        )
+        
+        # Create tools
         self.tools = self._create_tools()
+
+    async def aclose(self):
+        """Close the underlying HTTP client."""
+        if self._client:
+            await self._client.aclose()
 
     def _create_tools(self) -> List[RestApiTool]:
         """Create tools from the OpenAPI specification.
@@ -459,8 +429,10 @@ class OpenAPIToolkit:
                 auth_config=self.auth_config,
                 rate_limit_config=self.rate_limit_config,
                 retry_config=self.retry_config,
-                pagination_config=self.pagination_config,
             )
+            
+            # Set toolkit reference for execute method to use
+            tool._toolkit = self
 
             tools.append(tool)
 
@@ -496,6 +468,89 @@ class OpenAPIToolkit:
         """
         return [tool.to_schema() for tool in self.tools]
 
+    async def request(
+        self, 
+        method: str, 
+        url: str, 
+        *, 
+        params=None, 
+        headers=None, 
+        json=None
+    ) -> Dict[str, Any]:
+        """Make an HTTP request with retry and rate limiting.
+        
+        Args:
+            method: HTTP method
+            url: URL to request
+            params: Query parameters
+            headers: HTTP headers
+            json: JSON body
+            
+        Returns:
+            Parsed response data
+        """
+        # Check and wait for rate limit if needed
+        await self._rate_limiter.consume_token_async()
+        
+        # Define retry decorator with retry handler's kwargs
+        @tenacity.retry(**self._retry_handler.tenacity_kwargs())
+        async def _do_request():
+            response = await self._client.request(
+                method, 
+                url, 
+                params=params, 
+                headers=headers, 
+                json=json
+            )
+            response.raise_for_status()
+            
+            # Parse response
+            if response.content:
+                try:
+                    return response.json()
+                except ValueError:
+                    return {"text": response.text}
+            else:
+                return {
+                    "status": "Success",
+                    "status_code": response.status_code,
+                }
+                
+        return await _do_request()
+
+
+class FastMCPOpenAPITool(Tool):
+    """Bridges RestApiTool -> FastMCP Tool object."""
+
+    def __init__(self, rest_tool: RestApiTool):
+        """Initialize a FastMCPOpenAPITool.
+        
+        Args:
+            rest_tool: RestApiTool instance to wrap
+        """
+        super().__init__(
+            name=rest_tool.name,
+            description=rest_tool.description,
+            parameters=rest_tool.to_schema()["parameters"],
+            fn=self._run,
+            context_kwarg="context",
+        )
+        self._rest_tool = rest_tool
+
+    async def _run(self, **kwargs):
+        """Execute the tool asynchronously.
+        
+        Args:
+            **kwargs: Parameters for the tool
+            
+        Returns:
+            Tool execution result as MCP-compatible content
+        """
+        # Call the async execution method directly
+        raw = await self._rest_tool.execute_async(**kwargs)
+        return _convert_to_content(raw)
+
+
 async def execute_tool(
     tool_schema: Dict[str, Any], 
     toolkit: "OpenAPIToolkit", 
@@ -520,6 +575,6 @@ async def execute_tool(
     if not tool:
         raise ValueError(f"Tool '{tool_name}' not found in toolkit")
     
-    # Execute the tool with parameters
-    result = tool.execute(**parameters)
+    # Execute the tool with parameters (using async method directly)
+    result = await tool.execute_async(**parameters)
     return result

@@ -1,178 +1,366 @@
-"""Tests for utility functions."""
-
+import unittest
+from unittest.mock import patch, mock_open, MagicMock
 import json
 import os
-import tempfile
-import unittest
+import sys
+import datetime
+import yaml
 
-from src.utils import ServerRegistry, ApiConfig
+# Add the project root to the Python path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+from src.utils import (
+    load_spec_from_file,
+    load_spec_from_url,
+    substitute_env_vars,
+    ApiConfig,
+    ServerRegistry,
+    CrawlConfig, # Import CrawlConfig
+)
+from src.openapi.models import ApiAuthConfig, RateLimitConfig, RetryConfig
+from src.constants import DEFAULT_REGISTRY_FILE
 
 
-class TestServerRegistry(unittest.TestCase):
-    """Tests for the ServerRegistry class."""
+class TestLoadSpecFromFile(unittest.TestCase):
 
-    def setUp(self):
-        """Set up test fixtures."""
-        # Create a temporary file for testing
-        self.temp_file = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
-        self.temp_file.write(b"{}")
-        self.temp_registry_file = self.temp_file.name
-        self.temp_file.close()
+    @patch("builtins.open", new_callable=mock_open)
+    def test_load_json_file(self, mock_file):
+        mock_file.return_value.read.return_value = '{"openapi": "3.0.0"}'
+        spec = load_spec_from_file("test.json")
+        self.assertEqual(spec, {"openapi": "3.0.0"})
+        mock_file.assert_called_once_with("test.json", "r")
 
-    def tearDown(self):
-        """Tear down test fixtures."""
-        if os.path.exists(self.temp_registry_file):
-            os.unlink(self.temp_registry_file)
+    @patch("src.utils.yaml.safe_load")
+    @patch("builtins.open", new_callable=mock_open)
+    def test_load_yaml_file(self, mock_file, mock_yaml_load):
+        mock_yaml_load.return_value = {"openapi": "3.0.0"}
+        mock_file.return_value.read.return_value = "openapi: 3.0.0"
+        
+        spec = load_spec_from_file("test.yaml")
+        self.assertEqual(spec, {"openapi": "3.0.0"})
+        mock_file.assert_called_once_with("test.yaml", "r")
+        mock_yaml_load.assert_called_once()
 
-    def test_init_creates_registry_file(self):
-        """Test that initializing ServerRegistry creates the registry file."""
-        # Delete the file first to ensure it's created by the registry
-        if os.path.exists(self.temp_registry_file):
-            os.unlink(self.temp_registry_file)
+    @patch("src.utils.yaml.safe_load")
+    @patch("builtins.open", new_callable=mock_open)
+    def test_load_yml_file(self, mock_file, mock_yaml_load):
+        mock_yaml_load.return_value = {"openapi": "3.0.0"}
+        mock_file.return_value.read.return_value = "openapi: 3.0.0"
 
-        _registry = ServerRegistry(self.temp_registry_file)
-        self.assertTrue(os.path.exists(self.temp_registry_file))
+        spec = load_spec_from_file("test.yml")
+        self.assertEqual(spec, {"openapi": "3.0.0"})
+        mock_file.assert_called_once_with("test.yml", "r")
+        mock_yaml_load.assert_called_once()
 
-        # Check that it's a valid JSON file with an empty dict
-        with open(self.temp_registry_file, "r") as f:
-            data = json.load(f)
-            self.assertEqual(data, {})
+    @patch("builtins.open", new_callable=mock_open)
+    def test_unsupported_extension(self, mock_file):
+        mock_file.return_value.read.return_value = "some text"
+        with self.assertRaises(ValueError) as context:
+            load_spec_from_file("test.txt")
+        self.assertIn("Unsupported file extension: .txt", str(context.exception))
 
-    def test_add_server(self):
-        """Test adding a server to the registry."""
-        registry = ServerRegistry(self.temp_registry_file)
 
-        registry.add_server("test-api", "/path/to/config.json", "/path/to/db")
+class TestLoadSpecFromUrl(unittest.TestCase):
 
-        # Verify the server was added
-        servers = registry.list_servers()
-        self.assertEqual(len(servers), 1)
-        self.assertEqual(servers[0]["name"], "test-api")
-        self.assertEqual(servers[0]["config_path"], "/path/to/config.json")
-        self.assertEqual(servers[0]["db_directory"], "/path/to/db")
-        self.assertIn("added_at", servers[0])
+    @patch("src.utils.requests.get")
+    def test_load_json_from_url_content_type(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.headers = {"Content-Type": "application/json"}
+        mock_response.json.return_value = {"openapi": "3.0.0"}
+        mock_get.return_value = mock_response
 
-    def test_list_servers(self):
-        """Test listing servers from the registry."""
-        registry = ServerRegistry(self.temp_registry_file)
+        spec = load_spec_from_url("http://example.com/spec.json")
+        self.assertEqual(spec, {"openapi": "3.0.0"})
+        mock_get.assert_called_once_with("http://example.com/spec.json", timeout=30)
+        mock_response.raise_for_status.assert_called_once()
 
-        # Add some servers
-        registry.add_server("api1", "/path/to/api1.json", "/path/to/db1")
-        registry.add_server("api2", "/path/to/api2.json", "/path/to/db2")
+    @patch("src.utils.requests.get")
+    def test_load_yaml_from_url_content_type(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.headers = {"Content-Type": "application/x-yaml"}
+        mock_response.text = "openapi: 3.0.0"
+        mock_get.return_value = mock_response
 
-        # List servers
-        servers = registry.list_servers()
-        self.assertEqual(len(servers), 2)
-        self.assertEqual({s["name"] for s in servers}, {"api1", "api2"})
+        spec = load_spec_from_url("http://example.com/spec.yaml")
+        self.assertEqual(spec, {"openapi": "3.0.0"})
 
-    def test_get_server(self):
-        """Test getting a server by name."""
-        registry = ServerRegistry(self.temp_registry_file)
+    @patch("src.utils.requests.get")
+    def test_load_yaml_from_url_extension(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.headers = {"Content-Type": "text/plain"} # Non-specific content type
+        mock_response.text = "openapi: 3.0.0"
+        mock_get.return_value = mock_response
 
-        # Add a server
-        registry.add_server("api1", "/path/to/api1.json", "/path/to/db1")
+        spec = load_spec_from_url("http://example.com/spec.yml")
+        self.assertEqual(spec, {"openapi": "3.0.0"})
 
-        # Get the server
-        server = registry.get_server("api1")
-        self.assertEqual(server["name"], "api1")
-        self.assertEqual(server["config_path"], "/path/to/api1.json")
+    @patch("src.utils.requests.get")
+    def test_load_from_url_fallback_json_then_yaml(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.headers = {"Content-Type": "text/plain"}
+        # First, make it fail JSON parsing, then succeed YAML
+        mock_response.json.side_effect = json.JSONDecodeError("err", "doc", 0)
+        mock_response.text = "openapi: 3.0.0" # Valid YAML
+        mock_get.return_value = mock_response
 
-        # Non-existent server
-        self.assertIsNone(registry.get_server("nonexistent"))
+        spec = load_spec_from_url("http://example.com/spec_fallback")
+        self.assertEqual(spec, {"openapi": "3.0.0"})
+        mock_response.json.assert_called_once() # Attempted JSON
+        
+    @patch("src.utils.requests.get")
+    def test_load_from_url_failed_parsing(self, mock_get):
+        mock_response = MagicMock()
+        mock_response.headers = {"Content-Type": "text/plain"}
+        mock_response.json.side_effect = json.JSONDecodeError("err", "doc", 0)
+        # Make yaml.safe_load also fail
+        with patch("src.utils.yaml.safe_load", side_effect=yaml.YAMLError("yaml err")):
+            mock_get.return_value = mock_response
+            with self.assertRaises(ValueError) as context:
+                load_spec_from_url("http://example.com/spec_fail_all")
+            self.assertIn("Unable to parse response as JSON or YAML", str(context.exception))
 
-    def test_delete_server(self):
-        """Test deleting a server."""
-        registry = ServerRegistry(self.temp_registry_file)
 
-        # Add servers
-        registry.add_server("api1", "/path/to/api1.json", "/path/to/db1")
-        registry.add_server("api2", "/path/to/api2.json", "/path/to/db2")
+class TestSubstituteEnvVars(unittest.TestCase):
 
-        # Delete one server
-        success = registry.delete_server("api1")
-        self.assertTrue(success)
+    @patch.dict(os.environ, {"MY_VAR": "my_value", "OTHER_VAR": "other_value"})
+    def test_substitute_single_var(self):
+        result = substitute_env_vars("Hello {MY_VAR}")
+        self.assertEqual(result, "Hello my_value")
 
-        # Check it was deleted
-        servers = registry.list_servers()
-        self.assertEqual(len(servers), 1)
-        self.assertEqual(servers[0]["name"], "api2")
 
-        # Try to delete non-existent server
-        success = registry.delete_server("nonexistent")
-        self.assertFalse(success)
+    @patch.dict(os.environ, {}) # No vars
+    def test_missing_var(self):
+        with patch("src.utils.logger") as mock_logger:
+            result = substitute_env_vars("Value: {MISSING_VAR}")
+            self.assertEqual(result, "Value: {MISSING_VAR}") # Should remain unchanged
+            
 
-    def test_get_all_config_paths(self):
-        """Test getting all config paths."""
-        registry = ServerRegistry(self.temp_registry_file)
+    def test_no_vars_in_string(self):
+        result = substitute_env_vars("Just a plain string")
+        self.assertEqual(result, "Just a plain string")
 
-        # Add servers
-        registry.add_server("api1", "/path/to/api1.json", "/path/to/db1")
-        registry.add_server("api2", "/path/to/api2.json", "/path/to/db2")
-
-        # Get config paths
-        paths = registry.get_all_config_paths()
-        self.assertEqual(len(paths), 2)
-        self.assertEqual(set(paths), {"/path/to/api1.json", "/path/to/api2.json"})
-
-    def test_get_db_directory(self):
-        """Test getting database directory for a server."""
-        registry = ServerRegistry(self.temp_registry_file)
-
-        # Add servers
-        registry.add_server("api1", "/path/to/api1.json", "/path/to/db1")
-        registry.add_server("api2", "/path/to/api2.json", "/path/to/db2")
-
-        # Get db directory for existing server
-        db_dir = registry.get_db_directory("api1")
-        self.assertEqual(db_dir, "/path/to/db1")
-
-        # Get db directory for non-existent server
-        db_dir = registry.get_db_directory("nonexistent")
-        self.assertIsNone(db_dir)
+    def test_empty_string(self):
+        result = substitute_env_vars("")
+        self.assertEqual(result, "")
+        
+    def test_none_input(self):
+        result = substitute_env_vars(None)
+        self.assertIsNone(result)
 
 
 class TestApiConfig(unittest.TestCase):
-    """Tests for the ApiConfig model."""
 
-    def test_api_config_with_db(self):
-        """Test creating an ApiConfig with a db_directory."""
-        config_data = {
-            "name": "test-api-db",
-            "display_name": "Test API with DB",
-            "description": "API for testing with custom DB directory",
-            "openapi_spec_url": "https://api.example.com/openapi.json",
-            "documentation_url": "https://api.example.com/docs",
-            "db_directory": "./test_custom_db",
-            "authentication": {
-                "type": "apiKey",
-                "in": "header",
-                "name": "X-API-Key",
-                "value": "test-api-key",
-            },
-        }
-        config = ApiConfig(**config_data)
-        self.assertEqual(config.name, "test-api-db")
-        self.assertEqual(config.db_directory, "./test_custom_db")
+    def test_basic_instantiation(self):
+        config = ApiConfig(
+            name="Test API",
+            description="A test API",
+            openapi_spec_url="http://example.com/spec.json",
+        )
+        self.assertEqual(config.name, "Test API")
+        self.assertEqual(config.server_name, "test_api") # Test property
 
-    def test_api_config_without_db(self):
-        """Test creating an ApiConfig without a db_directory."""
-        config_data = {
-            "name": "test-api",
-            "display_name": "Test API",
-            "description": "API for testing",
-            "openapi_spec_url": "https://api.example.com/openapi.json",
-            "documentation_url": "https://api.example.com/docs",
-            "authentication": {
-                "type": "apiKey",
-                "in": "header",
-                "name": "X-API-Key",
-                "value": "test-api-key",
-            },
+    def test_server_name_property(self):
+        config = ApiConfig(
+            name="My Awesome API V2",
+            description="Desc",
+            openapi_spec_url="url"
+        )
+        self.assertEqual(config.server_name, "my_awesome_api_v2")
+        config_no_name = ApiConfig(name="", description="d", openapi_spec_url="u")
+        self.assertEqual(config_no_name.server_name, "")
+
+
+    def test_auth_conversion_apikey_in_to_in_field(self):
+        data = {
+            "name": "API", "description": "d", "openapi_spec_url": "url",
+            "authentication": {"type": "apiKey", "in": "header", "name": "X-API-Key"}
         }
-        config = ApiConfig(**config_data)
-        self.assertEqual(config.name, "test-api")
-        self.assertIsNone(config.db_directory)
+        config = ApiConfig(**data)
+        self.assertIsInstance(config.authentication, ApiAuthConfig)
+        self.assertEqual(config.authentication.type, "apiKey")
+        self.assertEqual(config.authentication.in_field, "header")
+        self.assertEqual(config.authentication.name, "X-API-Key")
+
+    def test_auth_conversion_bearer_token_correction(self):
+        data = {
+            "name": "API", "description": "d", "openapi_spec_url": "url",
+            "authentication": {
+                "type": "apiKey", 
+                "in": "header", 
+                "name": "Authorization", 
+                "value": "Bearer mysecrettoken"
+            }
+        }
+        with patch("src.utils.logger") as mock_logger:
+            config = ApiConfig(**data)
+            mock_logger.info.assert_called_with("Converting Bearer token from apiKey to http authentication format")
+        
+        self.assertIsInstance(config.authentication, ApiAuthConfig)
+        self.assertEqual(config.authentication.type, "http")
+        self.assertEqual(config.authentication.scheme, "bearer")
+        self.assertEqual(config.authentication.value, "mysecrettoken")
+
+    def test_nested_config_conversion(self):
+        data = {
+            "name": "Full API", "description": "d", "openapi_spec_url": "url",
+            "rate_limits": {"requests_per_minute": 10, "max_tokens_per_minute": 1000},
+            "retry": {"max_retries": 5, "wait_fixed": 2},
+            "crawl": {"max_pages": 20, "rendering": True}
+        }
+        config = ApiConfig(**data)
+        self.assertIsInstance(config.rate_limits, RateLimitConfig)
+        self.assertEqual(config.rate_limits.requests_per_minute, 10)
+        self.assertIsInstance(config.retry, RetryConfig)
+        self.assertEqual(config.retry.max_retries, 5)
+        self.assertIsInstance(config.crawl, CrawlConfig)
+        self.assertEqual(config.crawl.max_pages, 20)
+        self.assertTrue(config.crawl.rendering)
+
+
+class TestServerRegistry(unittest.TestCase):
+    MOCK_REGISTRY_PATH = "test_registry.json"
+
+    def setUp(self):
+        # Ensure a clean state for each test
+        if os.path.exists(self.MOCK_REGISTRY_PATH):
+            os.remove(self.MOCK_REGISTRY_PATH)
+        # Mock os.makedirs to prevent actual directory creation during tests
+        patcher = patch('os.makedirs')
+        self.addCleanup(patcher.stop)
+        self.mock_makedirs = patcher.start()
+
+    def tearDown(self):
+        if os.path.exists(self.MOCK_REGISTRY_PATH):
+            os.remove(self.MOCK_REGISTRY_PATH)
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("os.path.exists")
+    def test_init_creates_file_if_not_exists(self, mock_path_exists, mock_file):
+        mock_path_exists.side_effect = [True, False] # Dir exists, file doesn't
+        registry = ServerRegistry(registry_path=self.MOCK_REGISTRY_PATH)
+        
+        # Ensure directory check was made
+        mock_path_exists.assert_any_call(os.path.dirname(self.MOCK_REGISTRY_PATH))
+        # Ensure file check was made
+        mock_path_exists.assert_any_call(self.MOCK_REGISTRY_PATH)
+        
+        # Ensure file was "created" (opened for writing with empty dict)
+        mock_file.assert_called_once_with(self.MOCK_REGISTRY_PATH, "w")
+        handle = mock_file()
+        handle.write.assert_called_once_with(json.dumps({}, indent=2))
+
+    @patch("os.path.exists", return_value=False) # Dir doesn't exist
+    def test_init_creates_directory_and_file(self, mock_path_exists):
+        with patch("builtins.open", new_callable=mock_open) as mock_file:
+            registry = ServerRegistry(registry_path=self.MOCK_REGISTRY_PATH)
+            self.mock_makedirs.assert_called_once_with(os.path.dirname(self.MOCK_REGISTRY_PATH), exist_ok=True)
+            mock_file.assert_called_once_with(self.MOCK_REGISTRY_PATH, "w")
+
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("os.path.exists", return_value=True)
+    def test_list_servers(self, mock_path_exists, mock_file):
+        registry_data = {
+            "Server1": {"name": "Server1", "config_path": "cfg1", "db_directory": "db1"},
+            "Server2": {"name": "Server2", "config_path": "cfg2", "db_directory": "db2"},
+        }
+        mock_file.return_value.read.return_value = json.dumps(registry_data)
+        registry = ServerRegistry(registry_path=self.MOCK_REGISTRY_PATH)
+        servers = registry.list_servers()
+        self.assertEqual(len(servers), 2)
+        self.assertIn({"name": "Server1", "config_path": "cfg1", "db_directory": "db1"}, servers)
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("os.path.exists", return_value=True)
+    def test_get_server(self, mock_path_exists, mock_file):
+        registry_data = {"Server1": {"name": "Server1", "config_path": "cfg1"}}
+        mock_file.return_value.read.return_value = json.dumps(registry_data)
+        registry = ServerRegistry(registry_path=self.MOCK_REGISTRY_PATH)
+        
+        server = registry.get_server("Server1")
+        self.assertEqual(server["name"], "Server1")
+        
+        server_none = registry.get_server("NotFound")
+        self.assertIsNone(server_none)
+
+    @patch("os.path.exists", return_value=True)
+    def test_delete_server(self, mock_path_exists):
+        initial_data = {"Server1": {"name": "Server1"}, "Server2": {"name": "Server2"}}
+        initial_json = json.dumps(initial_data)
+        expected_data_after_delete = {"Server2": {"name": "Server2"}}
+        final_json_after_delete = json.dumps(expected_data_after_delete, indent=2)
+        
+        m = mock_open()
+        with patch("builtins.open", m):
+            # Simulate file content for ServerRegistry._load_registry
+            # First call to _load_registry (in __init__)
+            m.return_value.read.return_value = initial_json 
+            registry = ServerRegistry(registry_path=self.MOCK_REGISTRY_PATH)
+            
+            # delete_server calls _load_registry again before modifying (or uses in-memory)
+            # Ensure the mock read is set up correctly if it re-reads.
+            # If ServerRegistry.delete_server loads from self.servers (already loaded in __init__),
+            # this second read setup might not be strictly necessary but is safe.
+            m.return_value.read.return_value = initial_json
+            deleted = registry.delete_server("Server1")
+            self.assertTrue(deleted)
+            
+            # Verify the write call content
+            # If _save_registry uses json.dump(obj, f, indent=2), it performs multiple writes.
+            # We need to capture all data written.
+            write_handle = m() # This is the mock file handle
+            self.assertGreater(write_handle.write.call_count, 0, "File write was not called.")
+            
+            # Concatenate all arguments from all calls to write_handle.write
+            written_content = "".join(call_args[0][0] for call_args in write_handle.write.call_args_list)
+            self.assertEqual(written_content, final_json_after_delete)
+
+            # Reset mock read for the next operation and clear write call list for this handle for subsequent checks
+            write_call_count_before_non_existent = write_handle.write.call_count
+            write_handle.reset_mock() # Clears call_args_list for write_handle.write
+
+            # For deleting a non-existent server, ensure _load_registry reflects the state after deletion
+            # (or that it loads from the current self.servers)
+            current_registry_state_after_delete = json.dumps(expected_data_after_delete)
+            m.return_value.read.return_value = current_registry_state_after_delete
+            
+            not_deleted = registry.delete_server("NotFound")
+            self.assertFalse(not_deleted)
+            # Ensure write wasn't called again if not_deleted
+            # write_handle.write.assert_not_called() would be better if we are sure no writes should happen.
+            # If the previous reset_mock() is effective, call_count here would be 0.
+            self.assertEqual(write_handle.write.call_count, 0, "Write was called when deleting a non-existent server.")
+
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("os.path.exists", return_value=True)
+    def test_get_all_config_paths(self, mock_path_exists, mock_file):
+        registry_data = {
+            "Server1": {"config_path": "path1"},
+            "Server2": {"config_path": "path2"},
+        }
+        mock_file.return_value.read.return_value = json.dumps(registry_data)
+        registry = ServerRegistry(registry_path=self.MOCK_REGISTRY_PATH)
+        paths = registry.get_all_config_paths()
+        self.assertEqual(len(paths), 2)
+        self.assertIn("path1", paths)
+        self.assertIn("path2", paths)
+
+    @patch("builtins.open", new_callable=mock_open)
+    @patch("os.path.exists", return_value=True)
+    def test_get_db_directory(self, mock_path_exists, mock_file):
+        registry_data = {"Server1": {"db_directory": "db_path_1"}}
+        mock_file.return_value.read.return_value = json.dumps(registry_data)
+        registry = ServerRegistry(registry_path=self.MOCK_REGISTRY_PATH)
+        
+        db_dir = registry.get_db_directory("Server1")
+        self.assertEqual(db_dir, "db_path_1")
+
+        db_dir_none = registry.get_db_directory("NotFound")
+        self.assertIsNone(db_dir_none)
 
 
 if __name__ == "__main__":
-    unittest.main()
+    unittest.main() 

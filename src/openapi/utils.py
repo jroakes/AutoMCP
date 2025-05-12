@@ -7,6 +7,8 @@ import time
 import logging
 from typing import Dict, List, Optional, Any
 import threading
+from pydantic import BaseModel, create_model
+from typing import Type
 
 from .models import RateLimitConfig, RetryConfig, PaginationConfig
 
@@ -104,6 +106,36 @@ class RateLimiter:
             self.hour_tokens -= 1
             self.day_tokens -= 1
 
+    async def consume_token_async(self):
+        """Consume a token for a request asynchronously, waiting if needed.
+        
+        This method will wait asynchronously if rate limit is reached.
+        """
+        if not self.config.enabled:
+            return
+
+        import asyncio
+        
+        # First check if we need to wait
+        with self.lock:
+            self._refill_tokens()
+            wait_time = self.wait_time_seconds()
+        
+        # If we need to wait, do it asynchronously
+        if wait_time > 0:
+            logger.info(f"Rate limit reached. Waiting {wait_time:.2f} seconds before making request.")
+            await asyncio.sleep(wait_time)
+            
+            # Refill tokens again after waiting
+            with self.lock:
+                self._refill_tokens()
+                
+        # Consume tokens
+        with self.lock:
+            self.minute_tokens -= 1
+            self.hour_tokens -= 1
+            self.day_tokens -= 1
+
     def wait_time_seconds(self) -> float:
         """Calculate wait time until next token is available.
 
@@ -176,6 +208,43 @@ class RetryHandler:
             Time to wait in seconds before the next attempt
         """
         return self.config.backoff_factor * (2**attempt)
+        
+    def tenacity_kwargs(self) -> Dict[str, Any]:
+        """Returns a dictionary of kwargs for configuring tenacity retry decorator.
+        
+        Returns:
+            Dictionary of kwargs for tenacity retry decorator
+        """
+        import tenacity
+        
+        # If retries are disabled, return minimal configuration
+        if not self.config.enabled:
+            return {
+                "stop": tenacity.stop_after_attempt(1),  # Only try once
+                "reraise": True
+            }
+            
+        # Define retry condition - only retry on specified status codes
+        def is_retryable_exception(exception):
+            # For httpx, check status code
+            if hasattr(exception, "response") and hasattr(exception.response, "status_code"):
+                return exception.response.status_code in self.config.retry_on_status_codes
+            # For requests, handle HTTPError
+            if hasattr(exception, "response") and hasattr(exception, "request"):
+                return exception.response.status_code in self.config.retry_on_status_codes
+            # For other exceptions, don't retry
+            return False
+            
+        return {
+            "stop": tenacity.stop_after_attempt(self.config.max_retries),
+            "wait": tenacity.wait_exponential(
+                multiplier=self.config.backoff_factor,
+                min=1,
+                max=60
+            ),
+            "retry": tenacity.retry_if_exception(is_retryable_exception),
+            "reraise": True,
+        }
 
 
 class PaginationHandler:

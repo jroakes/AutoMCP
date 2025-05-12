@@ -8,16 +8,25 @@ import json
 import logging
 import os
 import sys
+import re
 from typing import Dict, List, Optional, Any
 
 import requests
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 from .constants import DEFAULT_REGISTRY_FILE
+from .openapi.models import ApiAuthConfig, RateLimitConfig, RetryConfig
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+# Define a simple CrawlConfig if it doesn't exist elsewhere
+class CrawlConfig(BaseModel):
+    """Configuration for documentation crawling."""
+    rendering: bool = False
+    max_pages: Optional[int] = None
+    max_depth: Optional[int] = None
 
 
 def configure_logging(debug: bool = False):
@@ -97,7 +106,39 @@ def load_spec_from_url(url: str) -> Dict[str, Any]:
                 return yaml.safe_load(response.text)
             except yaml.YAMLError:
                 raise ValueError("Unable to parse response as JSON or YAML")
+            
 
+
+def substitute_env_vars(value: str) -> str:
+    """Substitute environment variables in a string.
+
+    Handles `{VAR_NAME}`.
+    Keeps the original placeholder if the environment variable is not found.
+
+    Args:
+        value: String potentially containing environment variable references
+
+    Returns:
+        String with environment variables substituted
+    """
+    if not value or not isinstance(value, str):
+        return value
+
+ 
+    # Make sure all .env variables are loaded
+    from dotenv import load_dotenv
+    load_dotenv()
+
+
+    # Substitute the environment variables
+    try:
+        return value.format(**os.environ)
+    except KeyError as e:
+        logger.warning(f"Environment variable not found in environment: {e}")
+    except Exception as e:
+        logger.warning(f"Error substituting env vars in '{value}': {e}")
+
+    return value
 
 class ApiConfig(BaseModel):
     """Configuration for an API."""
@@ -110,11 +151,79 @@ class ApiConfig(BaseModel):
     documentation_url: Optional[str] = None
     openapi_spec_url: str
     openapi_spec: Optional[Dict[str, Any]] = None
-    authentication: Optional[Dict[str, Any]] = None
-    rate_limits: Optional[Dict[str, Any]] = None
-    retry: Optional[Dict[str, Any]] = None
-    crawl: Optional[Dict[str, Any]] = None
+    authentication: Optional[ApiAuthConfig] = None
+    rate_limits: RateLimitConfig = Field(default_factory=RateLimitConfig)
+    retry: RetryConfig = Field(default_factory=RetryConfig)
+    crawl: Optional[CrawlConfig] = None
     prompts: Optional[List[Dict[str, str]]] = None
+    db_directory: Optional[str] = None
+
+    @model_validator(mode='before')
+    @classmethod
+    def convert_nested_configs(cls, data: Any) -> Any:
+        """Convert nested dictionaries to Pydantic models."""
+        if not isinstance(data, dict):
+            return data
+            
+        # Handle authentication dict -> ApiAuthConfig conversion
+        if "authentication" in data and isinstance(data["authentication"], dict):
+            auth_data = data["authentication"]
+            
+            # Convert 'in' field to 'in_field' for apiKey auth
+            if auth_data.get("type") == "apiKey" and "in" in auth_data and "in_field" not in auth_data:
+                auth_data["in_field"] = auth_data.pop("in")
+            
+            # Handle common Bearer token format errors - people often incorrectly use:
+            # "type": "apiKey", "in": "header", "name": "Authorization", "value": "Bearer token"
+            # instead of the correct:
+            # "type": "http", "scheme": "bearer", "value": "token"
+            if (auth_data.get("type") == "apiKey" and 
+                auth_data.get("in_field") == "header" and 
+                auth_data.get("name") == "Authorization" and 
+                isinstance(auth_data.get("value"), str) and 
+                auth_data.get("value", "").startswith("Bearer ")):
+                
+                # Extract the actual token and convert to proper HTTP Bearer format
+                token = auth_data["value"].replace("Bearer ", "", 1).strip()
+                logger.info("Converting Bearer token from apiKey to http authentication format")
+                auth_data = {
+                    "type": "http",
+                    "scheme": "bearer",
+                    "value": token
+                }
+            
+            # Create ApiAuthConfig instance
+            try:
+                data["authentication"] = ApiAuthConfig(**auth_data)
+            except Exception as e:
+                logger.warning(f"Failed to convert authentication config: {e}")
+        
+        # Handle rate_limits dict -> RateLimitConfig conversion
+        if "rate_limits" in data and isinstance(data["rate_limits"], dict):
+            try:
+                data["rate_limits"] = RateLimitConfig(**data["rate_limits"])
+            except Exception as e:
+                logger.warning(f"Failed to convert rate limits config: {e}")
+                # Ensure we have a valid model instance
+                data["rate_limits"] = RateLimitConfig()
+        
+        # Handle retry dict -> RetryConfig conversion
+        if "retry" in data and isinstance(data["retry"], dict):
+            try:
+                data["retry"] = RetryConfig(**data["retry"])
+            except Exception as e:
+                logger.warning(f"Failed to convert retry config: {e}")
+                # Ensure we have a valid model instance
+                data["retry"] = RetryConfig()
+                
+        # Handle crawl dict -> CrawlConfig conversion
+        if "crawl" in data and isinstance(data["crawl"], dict):
+            try:
+                data["crawl"] = CrawlConfig(**data["crawl"])
+            except Exception as e:
+                logger.warning(f"Failed to convert crawl config: {e}")
+        
+        return data
 
     @property
     def server_name(self) -> str:

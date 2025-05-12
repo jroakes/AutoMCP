@@ -6,19 +6,21 @@ Description: Provides PromptGenerator for creating MCP-compatible prompts from A
 import logging
 from typing import Dict, List, Optional
 
+# FastMCP primitives
+from fastmcp.prompts import Prompt
+from fastmcp.prompts.prompt import PromptArgument
+
+# Import shared template strings
+from .templates import (
+    API_OVERVIEW_TEMPLATE,
+    TOOL_USAGE_GUIDE_TEMPLATE,
+    RESOURCE_USAGE_GUIDE_TEMPLATE,
+)
+
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
-
-class PromptTemplate(BaseModel):
-    """Template for a prompt to be used with an API."""
-
-    id: str
-    name: str
-    description: str
-    template: str
-    variables: List[str] = []
 
 
 class PromptGenerator:
@@ -47,199 +49,173 @@ class PromptGenerator:
         self.resources = resources
         self.custom_prompts = custom_prompts or []
 
-    def create_api_overview_prompt(self) -> PromptTemplate:
-        """Create a prompt template for an overview of the API.
+    # ---------------------------------------------------------------------
+    # Prompt builders (return Prompt objects)
+    # ---------------------------------------------------------------------
 
-        Returns:
-            A prompt template
-        """
-        # Get list of all tools
+    def _build_api_overview_prompt(self) -> Prompt:
+        """Return a *static* Prompt describing the API overview."""
+
         tool_names = [tool["name"] for tool in self.tools]
+        content = API_OVERVIEW_TEMPLATE.format(
+            api_name=self.api_name,
+            api_description=self.api_description,
+            tool_list=", ".join(tool_names),
+        )
 
-        # Create the template
-        template = f"""# {self.api_name} Overview
+        def _overview_fn() -> str:  # pragma: no cover – trivial closure
+            return content
 
-{self.api_description}
-
-This API provides the following tools:
-{', '.join(tool_names)}
-
-To use this API, you can call any of the available tools.
-
-Example:
-```
-To get information about X, you can use the get_x tool.
-```
-
-Let me know what specific information you need from the {self.api_name} API, and I'll help you find the right tool to use.
-"""
-
-        return PromptTemplate(
-            id="api_overview",
-            name=f"{self.api_name} API Overview",
+        return Prompt(
+            name="api_overview",
             description=f"Overview of the {self.api_name} API and its tools.",
-            template=template,
-            variables=[],
+            arguments=[],
+            fn=_overview_fn,
         )
 
-    def create_tool_usage_guide_prompt(self) -> PromptTemplate:
-        """Create a prompt template for tool usage guide.
+    def _build_tool_usage_guide_prompt(self) -> Prompt:
+        """Return a *static* Prompt describing tool usage."""
 
-        Returns:
-            A prompt template
-        """
-        template = f"""# {self.api_name} Tool Usage Guide
+        tool_names = [tool["name"] for tool in self.tools]
+        content = TOOL_USAGE_GUIDE_TEMPLATE.format(
+            api_name=self.api_name,
+            tool_list=", ".join(tool_names),
+        )
 
-**Tool Overview**
-The tools available for {self.api_name} are generated from its OpenAPI specification. Each tool represents an API endpoint and follows a consistent structure:
+        def _tool_usage_fn() -> str:  # pragma: no cover
+            return content
 
-1. **Name**: A descriptive name derived from the endpoint operation ID
-2. **Description**: Explanation of what the tool does, taken from the API documentation
-3. **Parameters**: Required and optional parameters for the tool, with data types and descriptions
-
-**How to Use the Tools**
-1. Identify the appropriate tool for your task based on the description
-2. Provide all required parameters in the correct format
-3. Handle the response according to the expected return type
-
-**Tool List**
-{', '.join([tool["name"] for tool in self.tools])}
-
-**Authentication**
-Most API calls require authentication. Check the authentication guide for how to obtain and use API credentials.
-
-**Error Handling**
-When tools return errors, check for:
-- Missing required parameters
-- Invalid parameter formats
-- Authentication issues
-- Rate limit restrictions
-- Server errors (may require retries)
-
-For detailed information about a specific tool, use its name to get parameter requirements and examples.
-"""
-
-        return PromptTemplate(
-            id="tool_usage_guide",
-            name="Tool Usage Guide",
+        return Prompt(
+            name="tool_usage_guide",
             description="Guide to understanding and using the tools generated from OpenAPI specs",
-            template=template,
-            variables=[],
+            arguments=[],
+            fn=_tool_usage_fn,
         )
 
-    def create_resource_usage_guide_prompt(self) -> PromptTemplate:
-        """Create a prompt template for resource usage guide.
+    def _build_resource_usage_guide_prompt(self) -> Prompt:
+        """Return a *static* Prompt describing resource usage."""
 
-        Returns:
-            A prompt template
-        """
         resource_count = len(self.resources) if self.resources else 0
+        content = RESOURCE_USAGE_GUIDE_TEMPLATE.format(
+            api_name=self.api_name,
+            resource_count=resource_count,
+        )
 
-        template = f"""# {self.api_name} Resource Usage Guide
+        def _resource_usage_fn() -> str:  # pragma: no cover
+            return content
 
-**Understanding API Resources**
-Resources are searchable chunks of documentation from the {self.api_name} API documentation. These resources provide context and examples for using the API effectively.
-
-**How Resources are Created**
-1. API documentation pages are crawled from {self.api_name}'s documentation site
-2. Content is extracted, cleaned, and split into semantic chunks
-3. Chunks are embedded and stored in a vector database for semantic search
-
-**Current Resource Database**
-- Total resources: {resource_count}
-- Source: API documentation crawled from official sites
-- Embedding model: OpenAI text-embedding model
-
-**How to Use Resources**
-1. Search for relevant documentation using natural language queries
-2. Reference specific documentation sections when formulating API requests
-3. Use examples from documentation to understand parameter formats and expected responses
-
-**Searching Resources**
-When you need information about the API, you can search the documentation resources using the search_documentation tool. This performs a semantic search and returns the most relevant chunks.
-
-Example search: "How to authenticate with {self.api_name}?"
-"""
-
-        return PromptTemplate(
-            id="resource_usage_guide",
-            name="Resource Usage Guide",
+        return Prompt(
+            name="resource_usage_guide",
             description="Guide to understanding and using the resources created from crawled API documentation",
-            template=template,
-            variables=[],
+            arguments=[],
+            fn=_resource_usage_fn,
         )
 
-    def create_custom_prompt(
-        self, prompt_data: Dict[str, str], index: int
-    ) -> PromptTemplate:
-        """Create a prompt template from custom prompt data.
+    def _build_custom_prompt(self, prompt_data: Dict[str, str], index: int) -> Prompt:
+        """Convert an arbitrary prompt entry from the API config into a Prompt object."""
 
-        Args:
-            prompt_data: Dictionary containing prompt data
-            index: Index of the prompt for ID generation
-
-        Returns:
-            A prompt template
-        """
         prompt_name = prompt_data.get("name", f"Custom Prompt {index}")
-        prompt_id = prompt_name.lower().replace(" ", "_")
+        description = prompt_data.get("description", "")
 
-        return PromptTemplate(
-            id=prompt_id,
-            name=prompt_name,
-            description=prompt_data.get("description", ""),
-            template=prompt_data.get("content", ""),
-            variables=[],
-        )
+        # If the prompt is conversation style (list of messages)
+        if isinstance(prompt_data.get("content"), list):
+            messages = prompt_data["content"]
+            return Prompt(
+                name=prompt_name.lower().replace(" ", "_"),
+                description=description,
+                arguments=[],
+                fn=lambda messages=messages: messages,  # Capture messages in lambda
+            )
 
-    def to_mcp_prompts(self) -> Dict:
-        """Convert prompt templates to MCP prompts format.
+        # Otherwise treat as template string (with optional variables)
+        template_str = prompt_data.get("content", "")
+        variables = prompt_data.get("variables", [])
 
-        Returns:
-            Dictionary of MCP prompts compatible with FastMCP
-        """
-        try:
-            from fastmcp.prompts.base import UserMessage, AssistantMessage
-        except ImportError:
-            # Use our mock classes during testing
-            from tests.fixtures.fastmcp_mock import UserMessage, AssistantMessage
-
-        # Create the standard prompts
-        prompts = [
-            self.create_api_overview_prompt(),
-            self.create_tool_usage_guide_prompt(),
-            self.create_resource_usage_guide_prompt(),
+        # Build PromptArguments (all required = True by default)
+        arg_objs: List[PromptArgument] = [
+            PromptArgument(name=v, description=f"Value for {v}", required=True)
+            for v in variables
         ]
 
-        # Add custom prompts from the config file
+        if variables:
+            # Create a template function that formats with kwargs
+            return Prompt(
+                name=prompt_name.lower().replace(" ", "_"),
+                description=description,
+                arguments=arg_objs,
+                fn=lambda template_str=template_str, **kwargs: template_str.format(**kwargs),
+            )
+
+        # Static string prompt (no variables)
+        return Prompt(
+            name=prompt_name.lower().replace(" ", "_"),
+            description=description,
+            arguments=[],
+            fn=lambda template_str=template_str: template_str,
+        )
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def generate_prompts(self) -> List[Prompt]:
+        """Generate a list of Prompt objects for FastMCP."""
+
+        # Create the static prompts directly from their templates
+        api_overview = Prompt(
+            name="api_overview",
+            description=f"Overview of the {self.api_name} API and its tools.",
+            arguments=[],
+            fn=lambda: API_OVERVIEW_TEMPLATE.format(
+                api_name=self.api_name,
+                api_description=self.api_description,
+                tool_list=", ".join([tool["name"] for tool in self.tools]),
+            ),
+        )
+        
+        tool_usage = Prompt(
+            name="tool_usage_guide",
+            description="Guide to understanding and using the tools generated from OpenAPI specs",
+            arguments=[],
+            fn=lambda: TOOL_USAGE_GUIDE_TEMPLATE.format(
+                api_name=self.api_name,
+                tool_list=", ".join([tool["name"] for tool in self.tools]),
+            ),
+        )
+        
+        resource_count = len(self.resources) if self.resources else 0
+        resource_usage = Prompt(
+            name="resource_usage_guide",
+            description="Guide to understanding and using the resources created from crawled API documentation",
+            arguments=[],
+            fn=lambda: RESOURCE_USAGE_GUIDE_TEMPLATE.format(
+                api_name=self.api_name,
+                resource_count=resource_count,
+            ),
+        )
+        
+        prompts = [api_overview, tool_usage, resource_usage]
+
+        # Custom prompts from API config
         for i, prompt_data in enumerate(self.custom_prompts):
-            prompts.append(self.create_custom_prompt(prompt_data, i))
+            try:
+                prompts.append(self._build_custom_prompt(prompt_data, i))
+            except Exception as exc:  # pragma: no cover – defensive
+                logger.warning("Failed to build custom prompt %s: %s", prompt_data, exc)
 
-        # Convert to MCP format compatible with FastMCP
-        mcp_prompts = {}
-        for prompt in prompts:
-            prompt_id = prompt.id
+        return prompts
 
-            # For tool usage prompts, format as messages for better LLM interaction
-            if prompt_id == "tool_usage_guide":
-                mcp_prompts[prompt_id] = [
-                    UserMessage("How should I use the tools in this API?"),
-                    AssistantMessage(prompt.template),
-                    {"description": prompt.description},
-                ]
-            elif prompt_id == "resource_usage_guide":
-                mcp_prompts[prompt_id] = [
-                    UserMessage("How can I use the documentation resources?"),
-                    AssistantMessage(prompt.template),
-                    {"description": prompt.description},
-                ]
-            else:
-                # For other prompts, use the structure expected by FastMCP
-                mcp_prompts[prompt_id] = {
-                    "name": prompt.name,
-                    "description": prompt.description,
-                    "template": prompt.template,
-                    "variables": prompt.variables,
-                }
+    # ------------------------------------------------------------------
+    # Back-compat shim (to be removed once callers are updated)
+    # ------------------------------------------------------------------
 
-        return mcp_prompts
+    def to_mcp_prompts(self) -> Dict[str, Prompt]:  # noqa: N802 – legacy name
+        """Return prompts as a mapping for legacy callers.
+
+        NOTE: The new preferred method is :py:meth:`generate_prompts` which
+        returns a list of :class:`fastmcp.Prompt` objects.  This shim provides
+        a minimal backwards-compatibility layer until all call-sites are
+        migrated.
+        """
+
+        return {prompt.name: prompt for prompt in self.generate_prompts()}

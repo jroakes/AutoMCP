@@ -178,7 +178,7 @@ class DocumentationCrawler:
             exclude_external_images=True,
             wait_until=wait_until,
             deep_crawl_strategy=crawl_strategy,
-            **kwargs,  # Additional parameters that override defaults
+
         )
 
         return config
