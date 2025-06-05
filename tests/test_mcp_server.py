@@ -116,5 +116,95 @@ class TestMCPServer(unittest.IsolatedAsyncioTestCase):
         self.mock_resource_manager.list_resources.assert_called_once()
         
 
+    def test_enhanced_resource_metadata(self, MockFastMCP):
+        """Test that enhanced resource metadata is properly formatted."""
+        # Create mock for FastMCP instance
+        mock_mcp_instance = MockFastMCP.return_value
+        mock_mcp_instance.resource = MagicMock()
+        
+        # Set up ResourceManager to return enhanced metadata
+        enhanced_resources = [
+            {
+                "uri": "docs://example.com/docs/authentication",
+                "name": "Authentication Guide", 
+                "description": "Documentation section: Authentication (Large: 1,500 chars)",
+                "mimeType": "text/markdown",
+                "size": 1500,
+                "lastModified": "2023-12-30T12:00:00",
+                "content": "# Authentication Guide\n\nComprehensive authentication guide...",
+                "metadata": {
+                    "original_url": "https://example.com/docs/authentication",
+                    "doc_id": "example.com/docs/authentication", 
+                    "crawl_depth": 1,
+                    "tags": ["authentication", "security"],
+                    "content_type": "documentation",
+                    "server_name": "example_api",
+                    "last_crawled": "2023-12-30T12:00:00"
+                }
+            },
+            {
+                "uri": "docs://example.com/docs/api/users",
+                "name": "Users API Reference",
+                "description": "Api - Users (Small: 800 chars)", 
+                "mimeType": "text/markdown",
+                "size": 800,
+                "content": "# Users API\n\nAPI reference for users...",
+                "metadata": {
+                    "original_url": "https://example.com/docs/api/users",
+                    "doc_id": "example.com/docs/api/users",
+                    "crawl_depth": 2,
+                    "tags": ["api", "reference"],
+                    "content_type": "documentation", 
+                    "server_name": "example_api"
+                }
+            }
+        ]
+        self.mock_resource_manager.list_resources.return_value = enhanced_resources
+        
+        # Make toolkit and prompts empty for this test
+        self.mock_mcp_config.toolkit = None
+        self.mock_mcp_config.prompts = []
+
+        server = MCPServer(self.mock_mcp_config)
+
+        # Verify the enhanced metadata structure
+        resources = self.mock_resource_manager.list_resources.return_value
+        
+        # Test first resource (authentication guide)
+        auth_resource = resources[0]
+        self.assertEqual(auth_resource["name"], "Authentication Guide")
+        self.assertEqual(auth_resource["mimeType"], "text/markdown")
+        self.assertEqual(auth_resource["size"], 1500)
+        self.assertIn("Large: 1,500 chars", auth_resource["description"])
+        self.assertIn("lastModified", auth_resource)
+        
+        # Test enhanced metadata
+        metadata = auth_resource["metadata"]
+        self.assertEqual(metadata["crawl_depth"], 1)
+        self.assertEqual(metadata["content_type"], "documentation")
+        self.assertIn("authentication", metadata["tags"])
+        self.assertIn("security", metadata["tags"])
+        self.assertEqual(metadata["server_name"], "example_api")
+        
+        # Test second resource (API reference)
+        api_resource = resources[1]
+        self.assertEqual(api_resource["name"], "Users API Reference") 
+        self.assertEqual(api_resource["size"], 800)
+        self.assertIn("Small: 800 chars", api_resource["description"])
+        
+        api_metadata = api_resource["metadata"]
+        self.assertEqual(api_metadata["crawl_depth"], 2)
+        self.assertIn("api", api_metadata["tags"])
+        self.assertIn("reference", api_metadata["tags"])
+        
+        # Verify ResourceManager was called
+        self.mock_resource_manager.list_resources.assert_called_once()
+        
+        print("✅ Enhanced metadata test passed!")
+        print(f"   📄 Found {len(resources)} resources with enhanced metadata")
+        print(f"   🏷️  Tags example: {metadata['tags']}")
+        print(f"   📊 Size info in description: {auth_resource['description']}")
+        print(f"   🕒 Last modified: {auth_resource.get('lastModified', 'Not set')}")
+
 if __name__ == '__main__':
     unittest.main() 

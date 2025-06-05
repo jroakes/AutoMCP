@@ -220,10 +220,11 @@ class ResourceManager:
         return None
 
     def list_resources(self) -> List[Dict[str, Any]]:
-        """List all available documentation resources.
+        """List all available documentation resources with enhanced metadata.
 
         Returns:
-            List of resource metadata for MCP consumption
+            List of resource metadata for MCP consumption with comprehensive information
+            to help applications make better selection decisions
         """
         try:
             # Get all documents from docs collection
@@ -233,27 +234,165 @@ class ResourceManager:
             for i, doc_id in enumerate(results["ids"]):
                 metadata = results["metadatas"][i] if results["metadatas"] else {}
                 title = metadata.get("title", "Untitled")
+                content = results["documents"][i]
 
                 # Original URL can be obtained from metadata
                 original_url = metadata.get("url", "")
+                
+                # Extract additional metadata for enhanced resource information
+                crawled_at = metadata.get("crawled_at")
+                depth = metadata.get("depth", 0)
+                
+                # Calculate content size for context window management
+                content_size = len(content) if content else 0
+                
+                # Determine MIME type based on content
+                mime_type = "text/markdown" if content else "text/plain"
+                
+                # Create a more descriptive description
+                description = self._create_resource_description(title, original_url, content_size, depth)
+                
+                # Extract topics/tags from URL path for better categorization
+                tags = self._extract_tags_from_url(original_url)
+                
+                # Format crawl timestamp for display
+                last_modified = None
+                if crawled_at:
+                    try:
+                        if isinstance(crawled_at, (int, float)):
+                            from datetime import datetime
+                            last_modified = datetime.fromtimestamp(crawled_at).isoformat()
+                        else:
+                            last_modified = str(crawled_at)
+                    except (ValueError, TypeError):
+                        last_modified = None
 
-                # Format as MCP resource with proper URI format
-                resources.append(
-                    {
-                        "uri": f"docs://{doc_id}",
-                        "name": title,
-                        "description": f"Documentation page: {title}",
-                        "content": results["documents"][i],
-                        "metadata": {
-                            "original_url": original_url,
-                            "doc_id": doc_id,
-                        },
-                    }
-                )
+                # Format as MCP resource with enhanced metadata
+                resource = {
+                    "uri": f"docs://{doc_id}",
+                    "name": title,
+                    "description": description,
+                    "mimeType": mime_type,  # MCP standard field
+                    "size": content_size,   # Help applications manage context window
+                    "content": content,     # Full content for backward compatibility
+                    "metadata": {
+                        "original_url": original_url,
+                        "doc_id": doc_id,
+                        "crawl_depth": depth,
+                        "tags": tags,
+                        "content_type": "documentation",
+                        "server_name": self.server_name,
+                        **{k: v for k, v in metadata.items() 
+                           if k not in ["url", "title", "doc_id", "crawled_at", "depth"]},
+                    },
+                }
+                
+                # Add lastModified if available
+                if last_modified:
+                    resource["lastModified"] = last_modified
+                    resource["metadata"]["last_crawled"] = last_modified
+                
+                resources.append(resource)
 
+            # Sort resources by relevance: shorter URLs (often main pages) first, then by title
+            resources.sort(key=lambda r: (len(r["metadata"]["original_url"]), r["name"].lower()))
+            
             return resources
         except Exception as e:
             logger.error(f"Error listing resources: {e}")
+            return []
+
+    def _create_resource_description(self, title: str, url: str, size: int, depth: int) -> str:
+        """Create a descriptive description for a resource.
+        
+        Args:
+            title: The resource title
+            url: The original URL
+            size: Content size in characters
+            depth: Crawl depth
+            
+        Returns:
+            A descriptive string for the resource
+        """
+        try:
+            from urllib.parse import urlparse
+            parsed_url = urlparse(url)
+            path_parts = [p for p in parsed_url.path.split('/') if p]
+            
+            # Create a context-aware description
+            if not path_parts:
+                context = "Main documentation page"
+            elif len(path_parts) == 1:
+                context = f"Documentation section: {path_parts[0].replace('-', ' ').replace('_', ' ').title()}"
+            else:
+                section = path_parts[-2].replace('-', ' ').replace('_', ' ').title()
+                page = path_parts[-1].replace('-', ' ').replace('_', ' ').title()
+                context = f"{section} - {page}"
+            
+            # Add size information for context window planning
+            if size > 10000:
+                size_info = f" (Large: {size:,} chars)"
+            elif size > 5000:
+                size_info = f" (Medium: {size:,} chars)"
+            elif size > 1000:
+                size_info = f" (Small: {size:,} chars)"
+            else:
+                size_info = f" (Brief: {size:,} chars)"
+            
+            return f"{context}{size_info}"
+            
+        except Exception:
+            # Fallback to simple description
+            return f"Documentation page: {title}"
+
+    def _extract_tags_from_url(self, url: str) -> List[str]:
+        """Extract topic tags from URL path for categorization.
+        
+        Args:
+            url: The original URL
+            
+        Returns:
+            List of topic tags
+        """
+        try:
+            from urllib.parse import urlparse
+            parsed_url = urlparse(url)
+            path_parts = [p for p in parsed_url.path.split('/') if p and len(p) > 2]
+            
+            # Common API documentation categories
+            api_categories = {
+                'auth', 'authentication', 'security', 'oauth',
+                'api', 'rest', 'graphql', 'webhooks',
+                'guides', 'tutorial', 'examples', 'quickstart',
+                'reference', 'sdk', 'client', 'endpoints',
+                'rate-limit', 'errors', 'troubleshooting',
+                'integration', 'setup', 'configuration'
+            }
+            
+            tags = []
+            for part in path_parts:
+                # Normalize and check if it's a known category
+                normalized = part.lower().replace('-', '').replace('_', '')
+                for category in api_categories:
+                    if category.replace('-', '') in normalized or normalized in category.replace('-', ''):
+                        tags.append(category)
+                        break
+                else:
+                    # Add original part if it's meaningful
+                    if len(part) > 3 and part.lower() not in ['docs', 'documentation', 'api']:
+                        tags.append(part.lower().replace('-', '_'))
+            
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_tags = []
+            for tag in tags:
+                if tag not in seen:
+                    seen.add(tag)
+                    unique_tags.append(tag)
+            
+            return unique_tags[:5]  # Limit to 5 most relevant tags
+            
+        except Exception:
             return []
 
     def search_chunks(self, query: str, limit: int = 5) -> List[Dict[str, Any]]:

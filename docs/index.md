@@ -4,11 +4,15 @@
 
 ## Key Features
 
-- **OpenAPI Integration**: Convert any API with an OpenAPI specification into an MCP-compatible server
-- **Documentation Crawling**: Automatically crawl and index API documentation for LLM context
-- **MCP Server**: Run a compliant MCP server that LLMs can interact with
-- **CLI Tools**: Manage multiple API servers from a simple command-line interface
-- **Prompt Management**: Configure and manage prompts for better LLM interactions
+- Generate MCP tools from OpenAPI specs
+- Crawl API documentation to create MCP resources
+- Serve custom prompts directly from configuration
+- Extract structured data from API specifications
+- Standardized authentication handling for API keys (header and query)
+- Rate limiting with token bucket algorithm to prevent API throttling
+- Retry mechanism with exponential backoff for transient failures
+- Launch an MCP server for immediate use
+- CLI Tools: Manage multiple API servers from a simple command-line interface
 
 ## Why AutoMCP?
 
@@ -22,42 +26,58 @@ AutoMCP makes it easy to expose your API to LLMs by handling:
 ## Getting Started
 
 ```bash
-# Install AutoMCP
-pip install automcp
+# Clone the repository
+git clone https://github.com/jroakes/automcp.git
+cd automcp
+
+# Install dependencies
+pip install -r requirements.txt
 
 # Add an API to AutoMCP
-automcp add --config api_config.json
+python -m src.main add --config example_config.json
 
 # Start the MCP server
-automcp serve
+python -m src.main serve --config example_config.json
 ```
 
 See the [Installation](getting-started/installation.md) and [Getting Started](getting-started/quick_start.md) guides for more details.
 
 ## How It Works
 
-1. AutoMCP parses your OpenAPI specification to understand your API's endpoints
-2. It crawls your API documentation to build a searchable knowledge base
-3. It sets up an MCP server that exposes your API as tools and resources
-4. LLMs can then discover and use your API through the MCP protocol
+1. The tool reads your API configuration from a JSON file
+2. It loads the OpenAPI specification from a URL or file
+3. It crawls the API documentation (if provided) to extract relevant information
+4. It generates MCP tools based on the OpenAPI endpoints
+5. It applies authentication, rate limiting, and retry configurations to the tools
+6. It creates MCP resources from the crawled documentation
+7. It serves custom prompts directly from the configuration file
+8. It launches an MCP server that LLM clients can connect to
 
 ## Architecture
 
 ```
 ┌─────────────┐    ┌──────────────┐    ┌─────────────┐
 │ OpenAPI     │    │ Documentation│    │ Prompt      │
-│ Processing  │    │ Crawling     │    │ Management  │
+│ Processing  │    │ Crawling     │    │ Generation  │
+│             │    │ (Crawl4AI)   │    │             │
 └──────┬──────┘    └───────┬──────┘    └──────┬──────┘
+       │                   │                  │
+       │          ┌────────▼──────────┐       │
+       │          │ Vector Database   │       │
+       │          │ (ChromaDB)        │       │
+       │          └────────┬──────────┘       │
        │                   │                  │
        └──────────┬────────┘────────┬─────────┘
                   │                 │
           ┌───────▼─────────────────▼───────┐
-          │           MCP Server            │
+          │        FastMCP Server           │
+          │  ┌─────────┬─────────┬────────┐ │
+          │  │ Tools   │Resources│Prompts │ │
+          │  └─────────┴─────────┴────────┘ │
           └───────────────┬─────────────────┘
-                          │
+                          │ MCP Protocol
           ┌───────────────▼─────────────────┐
-          │              LLM                │
+          │         LLM Client              │
+          │    (Claude, GPT-4, etc.)        │
           └─────────────────────────────────┘
 ```
-
-v0.1.2

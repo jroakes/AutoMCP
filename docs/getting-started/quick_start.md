@@ -6,9 +6,11 @@ This guide will walk you through the basic steps to get AutoMCP up and running.
 
 ```bash
 # Install AutoMCP
-# Clone the repository and install dependencies
+# Clone the repository
 git clone https://github.com/jroakes/automcp.git
 cd automcp
+
+# Install dependencies
 pip install -r requirements.txt
 
 # Add an API configuration

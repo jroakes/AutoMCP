@@ -1,28 +1,22 @@
 # Installation
 
-AutoMCP can be installed using pip, the Python package manager. Follow the steps below to get started.
+AutoMCP is installed by cloning the repository and installing dependencies using pip.
 
 ## Requirements
 
 - Python 3.9 or higher
 - pip (Python package manager)
+- Git
 
-## Installing from PyPI
-
-The recommended way to install AutoMCP is through pip:
-
-```bash
-pip install automcp
-```
-
-## Development Installation
-
-For development or the latest features, you can install AutoMCP directly from the GitHub repository:
+## Installation Steps
 
 ```bash
-git clone https://github.com/jroakes/AutoMCP.git
-cd AutoMCP
-pip install -e .
+# Clone the repository
+git clone https://github.com/jroakes/automcp.git
+cd automcp
+
+# Install dependencies
+pip install -r requirements.txt
 ```
 
 ## Verifying Installation
@@ -30,22 +24,22 @@ pip install -e .
 After installation, verify that AutoMCP is correctly installed by running:
 
 ```bash
-automcp --help
+python -m src.main --help
 ```
 
 You should see output listing the available commands and options.
 
 ## Dependencies
 
-AutoMCP automatically installs several dependencies:
+AutoMCP's dependencies are listed in the `requirements.txt` file. Key dependencies include:
 
-- `fastapi`: For serving the MCP API
-- `uvicorn`: ASGI server for FastAPI
-- `pydantic`: Data validation and settings management
-- `requests`: HTTP requests library
-- `PyYAML`: YAML parsing for configuration files
-- `chromadb`: Vector database for documentation storage
-- `colorama`: Terminal text coloring
+- `FastAPI`: For serving the MCP API
+- `FastMCP`: For MCP server implementation
+- `Crawl4AI`: For URL crawling and parsing
+- `ChromaDB`: For vector storage
+- `Requests`: For HTTP operations
+- `PyYAML`: For YAML parsing
+- `Tenacity`: For retry / API resiliency
 
 ## Configuration
 

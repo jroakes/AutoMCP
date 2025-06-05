@@ -7,7 +7,6 @@ fastmcp
 requests
 PyYAML
 chromadb
-fastmcp
 colorama
 tenacity
 python-dotenv
